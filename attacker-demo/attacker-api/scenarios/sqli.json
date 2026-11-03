@@ -1,0 +1,37 @@
+{
+  "id": "sqli",
+  "name": "Web exploit spray",
+  "persona": "bot",
+  "seed": 5,
+  "narration": "sqlmap-style user-agent spraying SQLi and path-traversal payloads at decoy paths — benign strings the decoy logs but never executes. Expected Medium, labelled Noise unless it continues.",
+  "steps": [
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/products?id=1' OR '1'='1",
+      "headers": { "User-Agent": "sqlmap/1.7#stable" },
+      "note": "sqli probe"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/products?id=1 UNION SELECT NULL,NULL,NULL--",
+      "headers": { "User-Agent": "sqlmap/1.7#stable" },
+      "note": "sqli union probe"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/../../../../etc/passwd",
+      "headers": { "User-Agent": "sqlmap/1.7#stable" },
+      "note": "path traversal probe"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/admin?id=1;DROP TABLE users;--",
+      "headers": { "User-Agent": "sqlmap/1.7#stable" },
+      "note": "sqli probe"
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+/* globals.css — terminal theme. Deliberately different from the SOC
+   dashboard (attackerFRONTEND.md). ~40 lines, nothing fancy. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: #0b0d0e;
+  color: #c9f7c9;
+  font-family: "SF Mono", "Fira Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 15px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  background: #0f1113;
+  color: #c9f7c9;
+  border: 1px solid #2a2f2f;
+  border-radius: 3px;
+  padding: 6px 8px;
+}
+
+a {
+  color: #ffb000;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2f2f;
+}

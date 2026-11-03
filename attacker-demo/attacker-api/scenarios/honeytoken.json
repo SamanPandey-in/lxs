@@ -1,0 +1,17 @@
+{
+  "id": "honeytoken",
+  "name": "Credential theft",
+  "persona": "human",
+  "seed": 13,
+  "narration": "Reads the fake secrets file to steal the honeytoken, then uses it directly against the real payments API — jumps straight to Critical via R16.",
+  "steps": [
+    { "kind": "http", "method": "GET", "path": "/.env", "note": "reads the fake key" },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/api/payments",
+      "headers": { "Authorization": "Bearer acme_live_h0n3yt0k3n_simulated" },
+      "note": "uses the stolen honeytoken against the real asset"
+    }
+  ]
+}

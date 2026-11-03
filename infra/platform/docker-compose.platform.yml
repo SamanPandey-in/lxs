@@ -1,0 +1,73 @@
+# LXS platform: Postgres 16 + API (+ optional Caddy TLS front).
+#
+#   docker compose -f infra/platform/docker-compose.platform.yml up -d postgres     # DB only (local dev)
+#   docker compose -f infra/platform/docker-compose.platform.yml up -d --build      # DB + API
+#   docker compose -f infra/platform/docker-compose.platform.yml --profile proxy up -d   # + Caddy on :80/:443
+#
+# Variables are read from the shell or from a .env file next to this compose file / at the repo root
+# (pass --env-file .env). Every variable has a dev default except where noted.
+name: lxs-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lxs}
+      POSTGRES_DB: ${POSTGRES_DB:-lxs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lxs}
+    ports:
+      # Published for local dev. In production bind to loopback or remove this line.
+      - "${POSTGRES_BIND:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  api:
+    build:
+      context: ../..
+      dockerfile: images/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ROLE: ${ROLE:-all}
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-lxs}:${POSTGRES_PASSWORD:-lxs}@postgres:5432/${POSTGRES_DB:-lxs}
+      SESSION_SECRET: ${SESSION_SECRET:-dev-only-session-secret-change-me}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      DEV_AUTH_BYPASS: ${DEV_AUTH_BYPASS:-false}
+      DEMO_MODE: ${DEMO_MODE:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${API_PORT:-8080}:8080"
+
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

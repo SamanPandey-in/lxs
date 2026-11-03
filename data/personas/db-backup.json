@@ -1,0 +1,171 @@
+{
+  "name": "db-backup",
+  "description": "A forgotten Debian 11 database backup box: weak default logins, nightly pg_dump jobs, a deploy user with an API config and a customer export. Breadcrumb target of the /.env decoy.",
+  "hostname": "db-backup-01",
+  "ssh_banner": "SSH-2.0-OpenSSH_8.4p1 Debian-5+deb11u3",
+  "users": [
+    {
+      "name": "deploy",
+      "uid": 1001,
+      "gid": 1001,
+      "home": "/home/deploy",
+      "shell": "/bin/bash",
+      "gecos": "Deploy,,,"
+    },
+    {
+      "name": "postgres",
+      "uid": 113,
+      "gid": 121,
+      "home": "/var/lib/postgresql",
+      "shell": "/bin/bash",
+      "gecos": "PostgreSQL administrator,,,"
+    },
+    {
+      "name": "backup",
+      "uid": 34,
+      "gid": 34,
+      "home": "/var/backups",
+      "shell": "/usr/sbin/nologin",
+      "gecos": "backup"
+    }
+  ],
+  "dirs": [
+    {
+      "path": "/srv/backups",
+      "uid": 113,
+      "gid": 113,
+      "mode": "0750"
+    },
+    {
+      "path": "/srv/exports",
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0750"
+    },
+    {
+      "path": "/home/deploy/.config",
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0700"
+    },
+    {
+      "path": "/home/deploy/.ssh",
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0700"
+    },
+    {
+      "path": "/var/log/pg-backup",
+      "uid": 113,
+      "gid": 113,
+      "mode": "0755"
+    }
+  ],
+  "files": [
+    {
+      "path": "/etc/hostname",
+      "content": "db-backup-01\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/hosts",
+      "content": "127.0.0.1\tlocalhost\n127.0.1.1\tdb-backup-01\n10.20.0.11\tdb-01.internal db-01\n10.20.0.21\tapp-01.internal app-01\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/os-release",
+      "content": "PRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\nNAME=\"Debian GNU/Linux\"\nVERSION_ID=\"11\"\nVERSION=\"11 (bullseye)\"\nVERSION_CODENAME=bullseye\nID=debian\nHOME_URL=\"https://www.debian.org/\"\nSUPPORT_URL=\"https://www.debian.org/support\"\nBUG_REPORT_URL=\"https://bugs.debian.org/\"\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/issue",
+      "content": "Debian GNU/Linux 11 \\n \\l\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/motd",
+      "content": "\nThe programs included with the Debian GNU/Linux system are free software;\nthe exact distribution terms for each program are described in the\nindividual files in /usr/share/doc/*/copyright.\n\nDebian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent\npermitted by applicable law.\n\nNightly PostgreSQL dumps live in /srv/backups. Do not store anything else here.\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/cron.d/pg-backup",
+      "content": "# nightly logical backup\n30 2 * * * postgres /usr/local/bin/pg-backup.sh >> /var/log/pg-backup/backup.log 2>&1\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/usr/local/bin/pg-backup.sh",
+      "content": "#!/bin/bash\nset -euo pipefail\nsource /home/deploy/backup.env\nSTAMP=$(date +%F)\npg_dump \"$DATABASE_URL\" | gzip > /srv/backups/nightly_${STAMP}.sql.gz\nfind /srv/backups -name 'nightly_*.sql.gz' -mtime +${RETENTION_DAYS} -delete\n",
+      "mode": "0755"
+    },
+    {
+      "path": "/home/deploy/backup.env",
+      "content": "# placeholder: overwritten at start-up with the generated honeytoken\nBACKUP_DIR=/srv/backups\nRETENTION_DAYS=14\n",
+      "mode": "0600",
+      "uid": 1001,
+      "gid": 1001,
+      "size": 196
+    },
+    {
+      "path": "/home/deploy/.config/acme.json",
+      "content": "{}\n",
+      "mode": "0600",
+      "uid": 1001,
+      "gid": 1001,
+      "size": 132
+    },
+    {
+      "path": "/home/deploy/.bash_history",
+      "content": "cd /srv/backups\nls -la\npg_dump -h db-01 -U svc_reporting shop_prod | gzip > nightly.sql.gz\ncat ~/.config/acme.json\ncurl -s -H \"Authorization: Bearer $(jq -r .api_key ~/.config/acme.json)\" https://api.acme-internal.example/v1/health\nexit\n",
+      "mode": "0600",
+      "uid": 1001,
+      "gid": 1001
+    },
+    {
+      "path": "/home/deploy/.ssh/known_hosts",
+      "content": "db-01.internal ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBPlaceholderKeyNotRealOnlyForRealismxxxxxxxxxxxxxxxxxxxxxxxxxxxx=\n",
+      "mode": "0644",
+      "uid": 1001,
+      "gid": 1001
+    },
+    {
+      "path": "/srv/exports/customer_data.csv",
+      "content": "id,name,email\n",
+      "mode": "0640",
+      "uid": 1001,
+      "gid": 1001,
+      "size": 560
+    },
+    {
+      "path": "/srv/backups/nightly_2026-10-29.sql.gz",
+      "size": 48211904,
+      "mode": "0640",
+      "uid": 113,
+      "gid": 113
+    },
+    {
+      "path": "/srv/backups/nightly_2026-10-30.sql.gz",
+      "size": 48307122,
+      "mode": "0640",
+      "uid": 113,
+      "gid": 113
+    },
+    {
+      "path": "/srv/backups/nightly_2026-10-31.sql.gz",
+      "size": 48395560,
+      "mode": "0640",
+      "uid": 113,
+      "gid": 113
+    },
+    {
+      "path": "/var/log/pg-backup/backup.log",
+      "content": "2026-10-31 02:30:01 starting dump\n2026-10-31 02:31:44 ok 48395560 bytes\n",
+      "mode": "0644",
+      "uid": 113,
+      "gid": 113
+    }
+  ],
+  "commands": {
+    "/usr/bin/uptime": " 09:14:22 up 112 days,  3:41,  1 user,  load average: 0.08, 0.04, 0.01\n",
+    "/usr/bin/lscpu": "Architecture:                    x86_64\nCPU op-mode(s):                  32-bit, 64-bit\nCPU(s):                          2\nModel name:                      Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz\n"
+  }
+}

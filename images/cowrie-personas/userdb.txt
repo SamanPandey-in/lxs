@@ -1,0 +1,10 @@
+# user:x:password  (Cowrie UserDB). Weak defaults a scanner will find within minutes.
+admin:x:admin
+admin:x:password
+admin:x:admin123
+root:x:root
+root:x:123456
+root:x:password
+ubuntu:x:ubuntu
+postgres:x:postgres
+backup:x:backup

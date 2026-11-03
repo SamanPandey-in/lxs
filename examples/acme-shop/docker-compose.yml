@@ -1,0 +1,16 @@
+# The customer's own compose file. LXS adds lxs.compose.yml on top of it:
+#   docker compose -f docker-compose.yml -f lxs.compose.yml up -d
+services:
+  shop:
+    build:
+      context: ../..
+      dockerfile: examples/acme-shop/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      NODE_ENV: "${SHOP_NODE_ENV:-production}"
+      # Local demo only: lets the attack simulator pick its source IP via X-DS-Sim-IP.
+      # The SDK refuses to start if this is set while NODE_ENV=production, so it is off here.
+      LXS_DEV_TRUST_SIM_HEADER: "${DS_DEV_SIM:-0}"
+    restart: unless-stopped

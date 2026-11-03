@@ -1,0 +1,46 @@
+{
+  "id": "noise",
+  "name": "Internet scanner",
+  "persona": "bot",
+  "seed": 7,
+  "narration": "A generic scanner/brute-force bot sweeps common paths and hammers SSH logins at bot cadence, with a scanner user-agent. Expected to score low and get auto-suppressed as Noise.",
+  "steps": [
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/admin",
+      "headers": { "User-Agent": "Masscan/1.0" },
+      "note": "sweep"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/.env",
+      "headers": { "User-Agent": "Masscan/1.0" },
+      "note": "sweep"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/wp-login.php",
+      "headers": { "User-Agent": "Masscan/1.0" },
+      "note": "sweep"
+    },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/phpmyadmin",
+      "headers": { "User-Agent": "Masscan/1.0" },
+      "note": "sweep"
+    },
+    { "kind": "ssh", "action": "connect" },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "root",
+      "password": "123456",
+      "expect": "fail",
+      "repeat": 5
+    }
+  ]
+}

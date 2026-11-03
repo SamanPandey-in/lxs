@@ -1,0 +1,26 @@
+{
+  "name": "@lxs/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ds-agent: the only component that holds the platform key. Tails decoy logs, normalises, ships; pulls policy; serves a local socket API to the SDK middleware.",
+  "main": "./src/main.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --import tsx test/*.test.ts"
+  },
+  "dependencies": {
+    "@lxs/normalizer": "workspace:*",
+    "@lxs/schema": "workspace:*",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
+    "typescript": "5.9.3"
+  }
+}

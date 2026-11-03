@@ -1,0 +1,37 @@
+{
+  "id": "ps-attacker",
+  "name": "PS targeted attacker",
+  "persona": "human",
+  "seed": 42,
+  "narration": "Scans, brute-forces, logs in with default creds, reads fake customer data, then hits the real payments API.",
+  "steps": [
+    { "kind": "http", "method": "GET", "path": "/admin", "note": "probe admin" },
+    { "kind": "http", "method": "GET", "path": "/.env", "note": "hunt secrets" },
+    { "kind": "http", "method": "GET", "path": "/backup.sql", "note": "hunt backups" },
+    { "kind": "ssh", "action": "connect" },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "admin",
+      "password": "wrong1",
+      "expect": "fail",
+      "repeat": 5
+    },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "admin",
+      "password": "admin",
+      "expect": "success"
+    },
+    { "kind": "ssh", "action": "command", "cmd": "uname -a" },
+    { "kind": "ssh", "action": "command", "cmd": "ls -la /srv/exports" },
+    { "kind": "ssh", "action": "command", "cmd": "cat /srv/exports/customer_data.csv" },
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/api/payments",
+      "note": "touch the REAL asset — the wow moment"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+node_modules
+dist
+
+# lxs: the ingest key and honeytoken plaintext never go in git
+.env.lxs
+.lxs/secrets/

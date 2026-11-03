@@ -1,0 +1,6 @@
+{"ts":"2026-11-01T10:43:19.000Z","src_ip":"203.0.113.66","user":"admin","service":"payments-api","result":"failure","asset":"Payments API"}
+{"ts":"2026-11-01T10:43:24.000Z","src_ip":"203.0.113.66","user":"admin","service":"payments-api","result":"success","asset":"Payments API"}
+{"ts":"2026-11-01T10:44:02.000Z","src_ip":"203.0.113.99","user":"svc-orders","service":"orders-api","result":"success","asset":"Orders API"}
+{"ts":"2026-11-01T10:30:05.000Z","src_ip":"198.51.100.23","user":"root","service":"payments-api","result":"failure","asset":"Payments API"}
+{"ts":"2026-11-01T09:58:30.000Z","src_ip":"192.0.2.10","user":"maria.k","service":"admin-console","result":"success"}
+{"ts":"2026-11-01T10:06:01.000Z","src_ip":"192.0.2.11","user":"j.ortiz","service":"admin-console","result":"success"}

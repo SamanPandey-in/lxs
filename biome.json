@@ -1,0 +1,115 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.3.14/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/.next",
+      "!**/node_modules",
+      "!**/.turbo",
+      "!**/Genesis_Prototype-sam-fix",
+      "!**/attacker-demo/**/node_modules",
+      "!**/.lxs",
+      "!**/*.css"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noAssignInExpressions": "warn",
+        "noArrayIndexKey": "warn",
+        "useIterableCallbackReturn": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "off",
+        "useTemplate": "warn"
+      },
+      "complexity": {
+        "noUselessSwitchCase": "off",
+        "noCommaOperator": "warn"
+      },
+      "correctness": {
+        "noUnusedFunctionParameters": "warn"
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/dashboard/**"],
+      "javascript": {
+        "formatter": {
+          "quoteStyle": "double"
+        }
+      },
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noArrayIndexKey": "warn"
+          },
+          "complexity": {
+            "noCommaOperator": "warn"
+          },
+          "a11y": {
+            "useSemanticElements": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
+        "apps/dashboard/components/ui/**",
+        "apps/dashboard/components/workspace.jsx",
+        "apps/dashboard/components/killchain.jsx"
+      ],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noLabelWithoutControl": "warn",
+            "useAriaPropsSupportedByRole": "warn"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/dashboard/lib/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "useExhaustiveDependencies": "warn"
+          }
+        }
+      }
+    }
+  ],
+  "css": {
+    "parser": {
+      "cssModules": false
+    },
+    "linter": {
+      "enabled": false
+    },
+    "formatter": {
+      "enabled": false
+    }
+  }
+}

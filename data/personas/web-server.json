@@ -1,0 +1,81 @@
+{
+  "name": "web-server",
+  "description": "An Ubuntu 22.04 web server with an nginx docroot and a deploy user. Secondary persona.",
+  "hostname": "web-01",
+  "ssh_banner": "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.6",
+  "users": [
+    {
+      "name": "ubuntu",
+      "uid": 1000,
+      "gid": 1000,
+      "home": "/home/ubuntu",
+      "shell": "/bin/bash",
+      "gecos": "Ubuntu,,,"
+    },
+    {
+      "name": "deploy",
+      "uid": 1001,
+      "gid": 1001,
+      "home": "/home/deploy",
+      "shell": "/bin/bash",
+      "gecos": "Deploy,,,"
+    },
+    {
+      "name": "www-data",
+      "uid": 33,
+      "gid": 33,
+      "home": "/var/www",
+      "shell": "/usr/sbin/nologin",
+      "gecos": "www-data"
+    }
+  ],
+  "dirs": [
+    {
+      "path": "/var/www/html",
+      "uid": 33,
+      "gid": 33,
+      "mode": "0755"
+    },
+    {
+      "path": "/home/deploy/.config",
+      "uid": 1001,
+      "gid": 1001,
+      "mode": "0700"
+    }
+  ],
+  "files": [
+    {
+      "path": "/etc/hostname",
+      "content": "web-01\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/os-release",
+      "content": "PRETTY_NAME=\"Ubuntu 22.04.4 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nVERSION=\"22.04.4 LTS (Jammy Jellyfish)\"\nID=ubuntu\nID_LIKE=debian\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/etc/nginx/nginx.conf",
+      "content": "user www-data;\nworker_processes auto;\nevents { worker_connections 768; }\nhttp { include /etc/nginx/sites-enabled/*; }\n",
+      "mode": "0644"
+    },
+    {
+      "path": "/var/www/html/index.html",
+      "content": "<html><body><h1>It works</h1></body></html>\n",
+      "mode": "0644",
+      "uid": 33,
+      "gid": 33
+    },
+    {
+      "path": "/home/deploy/.config/acme.json",
+      "content": "{}\n",
+      "mode": "0600",
+      "uid": 1001,
+      "gid": 1001,
+      "size": 132
+    }
+  ],
+  "commands": {
+    "/usr/bin/uptime": " 11:02:09 up 41 days,  7:12,  1 user,  load average: 0.21, 0.17, 0.12\n"
+  }
+}

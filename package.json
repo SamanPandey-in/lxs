@@ -1,0 +1,33 @@
+{
+  "name": "lxs",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "node scripts/dev.mjs",
+    "dev:all": "node scripts/dev.mjs --attacker",
+    "dev:turbo": "turbo run dev --parallel",
+    "test": "turbo run test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "turbo run typecheck",
+    "db:migrate": "pnpm --filter @lxs/api db:migrate",
+    "db:seed": "pnpm --filter @lxs/api db:seed",
+    "platform:up": "docker compose -f infra/platform/docker-compose.platform.yml up -d postgres",
+    "platform:all": "docker compose -f infra/platform/docker-compose.platform.yml up -d",
+    "platform:down": "docker compose -f infra/platform/docker-compose.platform.yml down",
+    "demo": "node scripts/demo.mjs up",
+    "demo:status": "node scripts/demo.mjs status",
+    "demo:down": "node scripts/demo.mjs down",
+    "demo:simulate": "pnpm --filter @lxs/simulator exec tsx src/main.ts --url http://localhost:8080 --key ds_dev_0000000000000000000000000000000000000000 --scenario"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.14",
+    "turbo": "2.6.1",
+    "typescript": "5.9.3"
+  }
+}

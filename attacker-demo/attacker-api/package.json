@@ -1,0 +1,21 @@
+{
+  "name": "attacker-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LXS attacker demo — thin service that performs real SSH/HTTP attacks against the honeypots (or replays via platform in safe mode).",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^5.0.1",
+    "ssh2": "^1.15.0",
+    "undici": "^6.19.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

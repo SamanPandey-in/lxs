@@ -1,0 +1,10 @@
+# Caddy terminates TLS and proxies to the API. SITE_ADDRESS=api.example.com gets a real certificate;
+# the default "localhost" gets Caddy's local CA.
+{$SITE_ADDRESS:localhost} {
+	encode zstd gzip
+	# SSE needs unbuffered streaming
+	reverse_proxy api:8080 {
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+	}
+}
