@@ -5,7 +5,7 @@ import type { Logger } from './telemetry.js';
 import { deterministicUlid } from './ulid.js';
 
 export interface RawLine {
-  source: 'web' | 'ssh';
+  source: 'web' | 'ssh' | 'redis' | 'postgres';
   /** Manifest decoy id (web lines carry their own decoy_id; ssh lines take this one). */
   decoyId: string;
   /** Stable key of the file the line came from, plus the byte offset: together the idempotency seed. */
@@ -107,6 +107,8 @@ function fromPackage(mod: NormalizerModule, opts: NormalizeOptions): LineNormali
       let n = 0;
       ctx.newId = (t) => deterministicUlid(t, `${seed}:${n}`);
       const events: DecoyEvent[] = [];
+      const databaseEvents = normalizeDatabaseLine(raw.source, rec, opts, raw.decoyId, seed);
+      if (databaseEvents !== null) return databaseEvents;
       if (raw.source === 'ssh') {
         ctx.sshDecoyId = raw.decoyId;
         const ev = mod.normalizeCowrie(rec, ctx);
@@ -170,6 +172,80 @@ const toPort = (v: unknown): number | undefined => {
   const n = typeof v === 'string' ? Number(v) : v;
   return typeof n === 'number' && Number.isInteger(n) && n >= 0 && n <= 65535 ? n : undefined;
 };
+
+/** Sanitise Redis/Postgres logs before they become platform events. Never retain command arguments or SQL text. */
+function normalizeDatabaseLine(
+  source: RawLine['source'],
+  rec: Record<string, unknown>,
+  opts: NormalizeOptions,
+  decoyId: string,
+  seed: string,
+): DecoyEvent[] | null {
+  if (source !== 'redis' && source !== 'postgres') return null;
+  const timestamp = source === 'redis' ? rec.ts : rec.timestamp;
+  const ts = typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))
+    ? new Date(timestamp).toISOString()
+    : new Date().toISOString();
+  let ip = '';
+  if (source === 'redis') ip = typeof rec.src_ip === 'string' ? rec.src_ip.trim() : '';
+  else {
+    const remote = typeof rec.remote_host === 'string' ? rec.remote_host : '';
+    const candidate = remote.startsWith('[')
+      ? remote.slice(1, remote.indexOf(']'))
+      : isIP(remote)
+        ? remote
+        : remote.replace(/:\d+$/, '');
+    ip = isIP(candidate) ? candidate : typeof rec.src_ip === 'string' && isIP(rec.src_ip) ? rec.src_ip : '';
+  }
+  if (!isIP(ip) || isLoopbackIp(ip)) return [];
+  const base = {
+    id: deterministicUlid(Date.parse(ts), `${seed}:${source}`),
+    schema_version: 1 as const,
+    count: 1,
+    simulated: opts.simulated,
+    timestamp: ts,
+    sensor: source as 'redis' | 'postgres',
+    decoy_id: decoyId,
+    is_decoy: true,
+    src_ip: ip,
+    src_port: toPort(source === 'redis' ? rec.src_port : rec.remote_port),
+    dst_service: `${source}:${opts.sshPorts.get(decoyId) ?? (source === 'redis' ? 6379 : 5432)}`,
+  };
+  if (source === 'redis') {
+    const command = typeof rec.command === 'string' ? rec.command.slice(0, 64).toUpperCase() : 'UNKNOWN';
+    return [{
+      ...base,
+      event_type: command === 'AUTH' ? 'auth.attempt' : 'db.command',
+      outcome: rec.outcome === 'failure' ? 'failure' : 'success',
+      command,
+    } as DecoyEvent];
+  }
+  const message = typeof rec.message === 'string' ? rec.message.slice(0, 2048) : '';
+  const failed = /failed|authentication failed|no password supplied/i.test(message);
+  const authOk = /connection (authenticated|authorized)/i.test(message);
+  const isConnect = /connection (received|authorized|authenticated)|disconnection:/i.test(message);
+  const closed = /disconnection:/i.test(message);
+  const verb = /statement:|execute /i.test(message)
+    ? message.match(/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|COPY|GRANT|REVOKE)\b/i)?.[1]?.toUpperCase() ?? 'SQL'
+    : undefined;
+  const eventType = failed || authOk
+    ? 'auth.attempt'
+    : verb
+      ? 'db.command'
+      : closed
+        ? 'connection.close'
+        : isConnect
+          ? 'connection.open'
+          : null;
+  if (!eventType) return [];
+  return [{
+    ...base,
+    event_type: eventType,
+    outcome: failed ? 'failure' : 'success',
+    username: clip(rec.user, 256),
+    ...(verb ? { command: verb } : {}),
+  } as DecoyEvent];
+}
 
 /**
  * Minimal built-in normalizer used only if `@lxs/normalizer` cannot be loaded. It covers the
@@ -280,6 +356,9 @@ export function createLocalNormalizer(opts: NormalizeOptions): LineNormalizer {
         }
         return events;
       }
+
+      const databaseEvents = normalizeDatabaseLine(raw.source, rec, opts, raw.decoyId, seed);
+      if (databaseEvents !== null) return databaseEvents;
 
       const id = String(rec.eventid ?? '');
       const ip = clip(rec.src_ip, 64) ?? '';

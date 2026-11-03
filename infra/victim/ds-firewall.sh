@@ -7,19 +7,21 @@
 # ESTABLISHED and still pass, so the honeypots keep working.
 #
 # Run once, as root, on the host that runs the decoy containers:
-#   sudo ./ds-firewall.sh [--bridge br-ds-trap] [--check] [--remove]
+#   sudo ./ds-firewall.sh [--network COMPOSE_NETWORK] [--bridge LINUX_BRIDGE] [--check] [--remove]
 #
 # Docker Desktop (macOS/Windows) runs containers inside a VM where these rules
 # cannot be applied from the host. Development there is fine; containment claims
 # are NOT. Say so out loud rather than claiming a PASS you cannot back.
 set -euo pipefail
 
-BRIDGE="br-ds-trap"
+BRIDGE=""
+NETWORK=""
 MODE="apply"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bridge) BRIDGE="$2"; shift 2 ;;
+    --network) NETWORK="$2"; shift 2 ;;
     --check)  MODE="check";  shift ;;
     --remove) MODE="remove"; shift ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
@@ -30,6 +32,22 @@ done
 require_root() {
   [[ "${EUID}" -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
 }
+
+if [[ -z "${BRIDGE}" ]]; then
+  if [[ -z "${NETWORK}" ]]; then
+    mapfile -t networks < <(docker network ls --filter label=com.docker.compose.network=ds_trap --format '{{.Name}}')
+    [[ "${#networks[@]}" -eq 1 ]] || {
+      echo "expected one Compose ds_trap network; pass --network NAME (found ${#networks[@]})" >&2
+      exit 2
+    }
+    NETWORK="${networks[0]}"
+  fi
+  BRIDGE="$(docker network inspect -f '{{index .Options "com.docker.network.bridge.name"}}' "${NETWORK}")"
+  if [[ -z "${BRIDGE}" || "${BRIDGE}" == "<no value>" ]]; then
+    NETWORK_ID="$(docker network inspect -f '{{.Id}}' "${NETWORK}")"
+    BRIDGE="br-${NETWORK_ID:0:12}"
+  fi
+fi
 
 # Two rules, each in its own chain:
 #   DOCKER-USER — traffic the bridge tries to route onward (the internet, other

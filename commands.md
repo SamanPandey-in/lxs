@@ -234,3 +234,25 @@ If Docker is holding port 8080:
 ```bash
 docker stop lxs-platform-api-1
 ```
+
+Phase 5 is the SSH honeypot and its agent pipeline. Cowrie runs in the acme-shop-ds-ssh-db-backup-01-1 Docker container and listens on host port 2222. SSH traffic goes directly to Cowrie; it doesn’t pass through the shop’s web middleware. Cowrie writes JSON events to a mounted log file. The agent tails that file, normalizes and batches events, then sends them to the platform ingest API. Compose generation (sdk/lxs/src/generate/compose.ts:99) Agent tailing and normalization (apps/agent/src/main.ts:194)
+
+You can inspect Cowrie’s own log inside its container:
+
+```bash
+docker exec -it acme-shop-ds-ssh-db-backup-01-1
+tail -f /cowrie/cowrie-git/var/log/cowrie/cowrie.json
+```
+
+The web path is shop request → SDK middleware → web-decoy Unix socket and JSONL log → agent → /v1/ingest → database. The SSH path is port 2222 → Cowrie JSON log → agent → /v1/ingest → database.
+
+To inspect recent ingested events, run a query like:
+
+```sql
+SELECT fields->>'sensor_kind' AS source, event_type, count(*) AS events,
+       count(*) FILTER (WHERE processed_at IS NOT NULL) AS processed
+FROM events
+WHERE received_at > now() - interval '15 minutes'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+```

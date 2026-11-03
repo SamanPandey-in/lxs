@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Counters, Logger } from './telemetry.js';
 
 export interface TailSource {
-  kind: 'web' | 'ssh';
+  kind: 'web' | 'ssh' | 'redis' | 'postgres';
   dir: string;
   /** Only the live file is followed; rotated copies are drained through the already-open handle. */
   match: RegExp;

@@ -21,7 +21,7 @@ export const EventType = z.enum([
 ]);
 export type EventType = z.infer<typeof EventType>;
 
-export const SensorKind = z.enum(['web', 'ssh', 'redis', 'sdk', 'prod']);
+export const SensorKind = z.enum(['web', 'ssh', 'redis', 'postgres', 'sdk', 'prod']);
 export type SensorKind = z.infer<typeof SensorKind>;
 
 export const Outcome = z.enum(['success', 'failure', 'unknown']);

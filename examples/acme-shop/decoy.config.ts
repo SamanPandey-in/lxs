@@ -23,6 +23,8 @@ t.create('ssh', 2222, {
   hostname: 'db-backup-01',
   credentials: 'weak-defaults',
 });
+t.create('redis', 6380, { seed: 'finance', requirePassword: false });
+t.create('postgres', 5433, { seed: 'shop', requirePassword: true });
 
 // Real routes worth naming in alerts.
 t.asset('/api/payments/*', { name: 'Payments API', criticality: 'critical' });

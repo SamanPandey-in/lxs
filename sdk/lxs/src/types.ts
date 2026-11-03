@@ -1,5 +1,5 @@
 export type WebDecoyType = 'web-admin' | 'web-bait';
-export type NetDecoyType = 'ssh' | 'redis';
+export type NetDecoyType = 'ssh' | 'redis' | 'postgres';
 export type Path = `/${string}`;
 
 export interface LXSOptions {
@@ -55,6 +55,12 @@ export interface RedisOptions {
   requirePassword?: boolean;
 }
 
+export interface PostgresOptions {
+  id?: string;
+  seed?: 'shop' | 'finance';
+  requirePassword?: boolean;
+}
+
 export interface AssetOptions {
   /** Display name in alerts. Defaults to the pattern. */
   name?: string;
@@ -101,7 +107,14 @@ export interface RedisSpec {
   seed: 'finance' | 'sessions';
   requirePassword: boolean;
 }
-export type DecoySpec = WebAdminSpec | WebBaitSpec | SshSpec | RedisSpec;
+export interface PostgresSpec {
+  type: 'postgres';
+  id: string;
+  port: number;
+  seed: 'shop' | 'finance';
+  requirePassword: boolean;
+}
+export type DecoySpec = WebAdminSpec | WebBaitSpec | SshSpec | RedisSpec | PostgresSpec;
 
 export interface AssetSpec {
   pattern: Path;

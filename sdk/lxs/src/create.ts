@@ -3,6 +3,7 @@ import {
   resolveAsset,
   resolveHoneytokens,
   resolveOptions,
+  resolvePostgres,
   resolveRedis,
   resolveSsh,
   resolveWebAdmin,
@@ -20,6 +21,7 @@ import type {
   HoneytokenSpec,
   LXSOptions,
   Path,
+  PostgresOptions,
   RedisOptions,
   ResolvedConfig,
   ResolvedOptions,
@@ -52,6 +54,7 @@ export class LXS {
   create(type: 'web-bait', path: Path, options?: WebBaitOptions): this;
   create(type: 'ssh', port: number, options?: SshOptions): this;
   create(type: 'redis', port: number, options?: RedisOptions): this;
+  create(type: 'postgres', port: number, options?: PostgresOptions): this;
   create(type: string, mountOrPort: Path | number, options?: object): this {
     let spec: DecoySpec;
     switch (type) {
@@ -67,11 +70,14 @@ export class LXS {
       case 'redis':
         spec = resolveRedis(mountOrPort, options as RedisOptions);
         break;
+      case 'postgres':
+        spec = resolvePostgres(mountOrPort, options as PostgresOptions);
+        break;
       default:
         throw new LXSConfigError(
           'E_TYPE_UNKNOWN',
           `unknown decoy type '${type}'.`,
-          "Use 'web-admin', 'web-bait', 'ssh' or 'redis'.",
+          "Use 'web-admin', 'web-bait', 'ssh', 'redis' or 'postgres'.",
         );
     }
     this.assertUnique(spec);
@@ -163,7 +169,7 @@ export class LXS {
         );
       }
     } else if (
-      this._decoys.some((d) => (d.type === 'ssh' || d.type === 'redis') && d.port === spec.port)
+      this._decoys.some((d) => d.type !== 'web-admin' && d.type !== 'web-bait' && d.port === spec.port)
     ) {
       throw new LXSConfigError('E_PORT_COLLISION', `host port ${spec.port} is declared twice.`);
     }

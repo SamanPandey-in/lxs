@@ -35,6 +35,8 @@ services:
       - ds_agent_state:/var/lib/lxs
       - ds_web_logs:/var/log/lxs/web:ro
       - ds_ssh_logs:/var/log/lxs/ssh-db-backup-01:ro
+      - ds_redis_6380_logs:/var/log/lxs/redis-6380:ro
+      - ds_postgres_5433_logs:/var/log/lxs/postgres-5433:ro
       - ./.lxs/manifest.json:/etc/lxs/manifest.json:ro
       - ./.lxs/secrets/honeytokens.json:/etc/lxs/honeytokens.json:ro
 
@@ -74,6 +76,48 @@ services:
       timeout: 5s
       retries: 3
 
+  ds-redis-6380:
+    <<: *ds-hardened
+    image: ${LXS_REDIS_IMAGE:-ghcr.io/lxs/decoy-redis:0.1.0}
+    networks: [ds_trap]
+    ports: ["6380:6379"]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    tmpfs: ["/tmp:size=8m,noexec,nosuid"]
+    volumes:
+      - ds_redis_6380_logs:/var/log/lxs:rw
+    environment:
+      LXS_DECOY_ID: "redis-6380"
+      LXS_REDIS_SEED: "finance"
+      LXS_REDIS_REQUIRE_PASSWORD: "0"
+
+  ds-postgres-5433:
+    <<: *ds-hardened
+    image: ${LXS_POSTGRES_IMAGE:-ghcr.io/lxs/decoy-postgres:0.1.0}
+    networks: [ds_trap]
+    ports: ["5433:5432"]
+    user: "70:70"
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 128
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_fake_only
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"
+      POSTGRES_DB: "shop_prod"
+      PGDATA: /var/lib/postgresql/data
+    command: ["postgres", "-c", "log_destination=jsonlog", "-c", "logging_collector=on", "-c", "log_directory=/var/log/lxs", "-c", "log_filename=postgres.log", "-c", "log_rotation_size=10MB", "-c", "log_connections=on", "-c", "log_disconnections=on", "-c", "log_min_messages=log", "-c", "max_connections=16", "-c", "shared_buffers=32MB", "-c", "work_mem=2MB", "-c", "temp_file_limit=16MB", "-c", "statement_timeout=10s"]
+    tmpfs: ["/tmp:size=16m,noexec,nosuid", "/var/run/postgresql:size=1m,uid=70,gid=70,mode=0700", "/var/lib/postgresql/data:size=128m,uid=70,gid=70,mode=0700"]
+    volumes:
+      - ds_postgres_5433_logs:/var/log/lxs
+      - ./.lxs/postgres-5433/init.sql:/docker-entrypoint-initdb.d/10-lxs-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lxs_fake -d shop_prod"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
 networks:
   ds_trap:
     driver: bridge
@@ -92,4 +136,6 @@ volumes:
   ds_web_logs: {}
   ds_ssh_logs: {}
   ds_ssh_data: {}
+  ds_redis_6380_logs: {}
+  ds_postgres_5433_logs: {}
   ds_agent_state: {}

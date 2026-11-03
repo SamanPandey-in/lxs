@@ -114,15 +114,6 @@ export function validateProject(
       "Add one, for example t.create('web-bait', '/.env').",
     );
   }
-  for (const d of cfg.decoys) {
-    if (d.type === 'redis') {
-      throw new LXSConfigError(
-        'E_UNSUPPORTED',
-        `redis decoy '${d.id}' is not available in this release.`,
-        'Remove it or wait for the optional redis sensor image.',
-      );
-    }
-  }
   const sshCount = cfg.decoys.filter((d) => d.type === 'ssh').length;
   if (sshCount > 0 && process.platform === 'win32') {
     warnings.push(
@@ -193,6 +184,7 @@ export function validateProject(
 function describeDecoy(d: ResolvedConfig['decoys'][number]): string {
   if (d.type === 'ssh') return `ssh :${d.port} (${d.hostname})`;
   if (d.type === 'redis') return `redis :${d.port}`;
+  if (d.type === 'postgres') return `postgres :${d.port}`;
   return `${d.type} ${d.mount}`;
 }
 

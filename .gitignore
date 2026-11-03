@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.next/
+.turbo/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+!.env.lxs.example
+.lxs/
+!examples/acme-shop/.lxs/
+!examples/acme-shop/.lxs/postgres-*/
+!examples/acme-shop/.lxs/postgres-*/init.sql
+coverage/
+*.log
+.DS_Store
+
+# third-party reference repo, not part of this product
+Genesis_Prototype-sam-fix/

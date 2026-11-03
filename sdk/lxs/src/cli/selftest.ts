@@ -67,7 +67,12 @@ except Exception:
     print("BLOCKED")
 `;
 
-const FS_PROBE_JS = "process.stdout.write(require('fs').readFileSync('/proc/net/dev','utf8'))";
+const FS_PROBE_JS = `const os=require('node:os'),fs=require('node:fs');
+const names=Object.keys(os.networkInterfaces());
+const assigned=Object.entries(os.networkInterfaces()).filter(([n,a])=>n!=='lo'&&(a||[]).some(x=>x.address));
+const routes=fs.readFileSync('/proc/net/route','utf8').trim().split('\\n').slice(1);
+const defaultRoute=routes.some(r=>(r.trim().split(/\\s+/)[1]||'')==='00000000');
+process.stdout.write(JSON.stringify({names,assigned:assigned.map(([n])=>n),defaultRoute}));`;
 
 const REPORT_JS = `const http=require('http');const body=process.argv[1];
 const r=http.request({socketPath:'/run/lxs/agent/agent.sock',method:'POST',path:'/v1/selftest-report',headers:{'content-type':'application/json','content-length':Buffer.byteLength(body)},timeout:8000},res=>{res.resume();res.on('end',()=>process.exit(res.statusCode<300?0:1));});
@@ -124,7 +129,7 @@ export async function runSelftest(
       'note: Docker Desktop detected. Host firewall rules (infra/victim/ds-firewall.sh) cannot be applied here, so network-egress',
     );
     log(
-      '      probes from the SSH decoy are expected to FAIL on this machine. Run selftest on the Linux victim host for a real result.',
+      '      probes from network decoys are expected to FAIL on this machine. Run selftest on the Linux victim host for a real result.',
     );
   }
 
@@ -145,11 +150,46 @@ export async function runSelftest(
     return notFound(first) ? exec(id, ['node', ...args]) : first;
   };
 
-  const sshDecoys = manifest.decoys.filter((d) => d.type === 'ssh');
+  // Probe the actual customer service address and published ports. A decoy can lack
+  // DNS access to the app name and still reach the app by its container IP.
+  const customerTargets: Array<[string, string, number]> = [];
+  if (composeFiles.length > 0) {
+    const customer = await run('docker', ['compose', ...composeArgs, 'ps', '-q', manifest.service]);
+    const customerId = customer.stdout.trim().split(/\s+/)[0];
+    if (customerId) {
+      const inspected = await run('docker', ['inspect', customerId]);
+      if (inspected.code === 0) {
+        const info = (JSON.parse(inspected.stdout) as Array<Record<string, any>>)[0] ?? {};
+        const ports = new Set<string>([
+          ...Object.keys((info.Config?.ExposedPorts ?? {}) as Record<string, unknown>),
+          ...Object.keys((info.NetworkSettings?.Ports ?? {}) as Record<string, unknown>),
+        ]);
+        for (const [network, detail] of Object.entries((info.NetworkSettings?.Networks ?? {}) as Record<string, any>)) {
+          const ip = String(detail.IPAddress ?? '');
+          if (!ip) continue;
+          for (const entry of ports) {
+            const p = Number(entry.split('/')[0]);
+            if (Number.isInteger(p) && p > 0) customerTargets.push([`customer ${manifest.service} ${ip}:${p} (${network})`, ip, p]);
+          }
+        }
+        for (const [target, bindings] of Object.entries((info.HostConfig?.PortBindings ?? {}) as Record<string, any[]>)) {
+          const containerPort = Number(target.split('/')[0]);
+          for (const binding of bindings ?? []) {
+            const publishedPort = Number(binding.HostPort);
+            if (Number.isInteger(containerPort) && Number.isInteger(publishedPort) && publishedPort > 0) {
+              customerTargets.push([`customer ${manifest.service} published port ${publishedPort}`, 'host-gateway', publishedPort]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const networkDecoys = manifest.decoys.filter((d) => ['ssh', 'redis', 'postgres'].includes(d.type));
   const services = [
     'ds-agent',
     ...(manifest.decoys.some((d) => d.type.startsWith('web')) ? ['ds-web'] : []),
-    ...sshDecoys.map((d) => `ds-${d.id}`),
+    ...networkDecoys.map((d) => `ds-${d.id}`),
   ];
 
   const ids = new Map<string, string>();
@@ -199,12 +239,13 @@ export async function runSelftest(
         detail: String(hc.NetworkMode),
       });
     }
-    if (svc.startsWith('ds-ssh') || sshDecoys.some((d) => `ds-${d.id}` === svc)) {
+    if (networkDecoys.some((d) => `ds-${d.id}` === svc)) {
       const nets = Object.keys((info.NetworkSettings?.Networks ?? {}) as Record<string, unknown>);
+      const trap = nets.find((n) => n.endsWith('ds_trap'));
       add({
         name: 'attached networks',
         target: svc,
-        passed: nets.length === 1 && (nets[0] ?? '').endsWith('ds_trap'),
+        passed: nets.length === 1 && !!trap,
         detail: nets.join(', ') || 'none',
       });
     }
@@ -214,16 +255,14 @@ export async function runSelftest(
   const web = ids.get('ds-web');
   if (web) {
     const r = await execNode(web, ['-e', FS_PROBE_JS]);
-    const ifaces = r.stdout
-      .split('\n')
-      .slice(2)
-      .map((l) => l.split(':')[0]?.trim())
-      .filter((x): x is string => !!x);
+    let probe: { names: string[]; assigned: string[]; defaultRoute: boolean } | null = null;
+    try { probe = JSON.parse(r.stdout) as { names: string[]; assigned: string[]; defaultRoute: boolean }; } catch { /* failed probe */ }
+    const safe = !!probe && probe.assigned.length === 0 && !probe.defaultRoute;
     add({
       name: 'network interfaces',
       target: 'ds-web',
-      passed: r.code === 0 && ifaces.length > 0 && ifaces.every((i) => i === 'lo'),
-      detail: r.code === 0 ? `${ifaces.join(', ')} only` : 'could not probe',
+      passed: r.code === 0 && safe,
+      detail: !probe ? 'could not probe' : safe ? `loopback only; ${probe.names.length - 1} unaddressed interfaces; no default route` : `addresses=${probe.assigned.join(',')}; default route=${probe.defaultRoute}`,
     });
     const s = await execNode(web, [
       '-e',
@@ -237,7 +276,7 @@ export async function runSelftest(
     });
   }
 
-  /* ssh: outbound probes must all fail */
+  /* network decoys: outbound probes must all fail */
   const endpoint = readEndpoint(opts.cwd);
   const platformHost = (() => {
     try {
@@ -248,7 +287,7 @@ export async function runSelftest(
       return null;
     }
   })();
-  for (const d of sshDecoys) {
+  for (const d of networkDecoys) {
     const svc = `ds-${d.id}`;
     const id = ids.get(svc);
     if (!id) continue;
@@ -270,19 +309,25 @@ export async function runSelftest(
         platformHost.host,
         platformHost.port,
       ]);
+    for (const [label, host, port] of customerTargets) {
+      const actualHost = host === 'host-gateway' ? (gw.stdout.trim() || '172.31.250.1') : host;
+      probes.push([label, actualHost, port]);
+    }
     for (const [label, host, port] of probes) {
-      const r = await exec(id, ['python3', '-c', PROBE_PY, host, String(port)]);
-      if (r.code !== 0) {
+      const r = d.type === 'postgres'
+        ? await exec(id, ['nc', '-z', '-w', '2', host, String(port)])
+        : await exec(id, ['python3', '-c', PROBE_PY, host, String(port)]);
+      if (d.type === 'postgres' && (r.code === 126 || r.code === 127 || /executable file not found|no such file or directory/i.test(r.stderr))) {
         // A probe that cannot run proves nothing: never count it as "blocked".
         add({
           name: `-> ${label}`,
           target: svc,
           passed: false,
-          detail: 'could not probe (python3 missing or exec failed)',
+          detail: 'could not probe (nc missing or exec failed)',
         });
         continue;
       }
-      const blocked = r.stdout.includes('BLOCKED');
+      const blocked = d.type === 'postgres' ? r.code !== 0 : r.stdout.includes('BLOCKED');
       add({
         name: `-> ${label}`,
         target: svc,
@@ -293,7 +338,7 @@ export async function runSelftest(
   }
 
   /* host firewall (Linux only; needs privileges) */
-  if (sshDecoys.length > 0) {
+  if (networkDecoys.length > 0) {
     if (process.platform !== 'linux') {
       add({
         name: 'DOCKER-USER + INPUT rules',
@@ -304,41 +349,57 @@ export async function runSelftest(
           'skipped: Docker Desktop runs in a VM, host firewall rules cannot be applied or checked here',
       });
     } else {
-      const a = await run('iptables', [
+      const first = ids.get(`ds-${networkDecoys[0]!.id}`);
+      const networkNames = first
+        ? await run('docker', ['inspect', '-f', '{{range $name, $cfg := .NetworkSettings.Networks}}{{$name}} {{end}}', first])
+        : { code: 1, stdout: '', stderr: '' };
+      const trapName = networkNames.stdout.trim().split(/\s+/).find((n) => n.endsWith('ds_trap'));
+      let bridge = '';
+      if (trapName) {
+        const inspected = await run('docker', ['network', 'inspect', trapName]);
+        if (inspected.code === 0) {
+          const net = (JSON.parse(inspected.stdout) as Array<Record<string, any>>)[0] ?? {};
+          bridge = String(net.Options?.['com.docker.network.bridge.name'] ?? '');
+          if (!bridge && typeof net.Id === 'string') bridge = `br-${net.Id.slice(0, 12)}`;
+        }
+      }
+      const a = bridge ? await run('iptables', [
         '-C',
         'DOCKER-USER',
         '-i',
-        'br-ds-trap',
+        bridge,
         '-m',
         'conntrack',
         '--ctstate',
         'NEW',
         '-j',
         'DROP',
-      ]);
-      const b = await run('iptables', [
+      ]) : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
+      const b = bridge ? await run('iptables', [
         '-C',
         'INPUT',
         '-i',
-        'br-ds-trap',
+        bridge,
         '-m',
         'conntrack',
         '--ctstate',
         'NEW',
         '-j',
         'DROP',
-      ]);
+      ]) : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
       const denied =
         /permission denied|you must be root|not permitted/i.test(a.stderr + b.stderr) ||
         a.code === 127;
       add({
         name: 'DOCKER-USER + INPUT rules',
         target: 'host',
-        passed: denied ? true : a.code === 0 && b.code === 0,
+        passed: denied ? true : !!bridge && a.code === 0 && b.code === 0,
         skipped: denied,
         detail: denied
           ? 'skipped: run with sudo to check (infra/victim/ds-firewall.sh installs them)'
-          : a.code === 0 && b.code === 0
+          : !bridge
+            ? 'skipped: could not determine the ds_trap bridge interface'
+            : a.code === 0 && b.code === 0
             ? 'PRESENT'
             : 'MISSING',
       });

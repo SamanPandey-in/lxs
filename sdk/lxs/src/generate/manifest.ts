@@ -38,6 +38,9 @@ export const POSTURE = {
  * deterministic across machines; the agent derives them from the mounted secrets file.
  */
 export function renderManifest(cfg: ResolvedConfig, tokens: HoneytokenFile): string {
+  const posture: Record<string, unknown> = { ...POSTURE };
+  if (cfg.decoys.some((d) => d.type === 'redis')) posture['ds-redis'] = { network: 'ds_trap', inbound_only: true, read_only: true, cap_drop: ['ALL'], no_new_privileges: true, user: '10001', mem_limit: '128m', pids_limit: 64 };
+  if (cfg.decoys.some((d) => d.type === 'postgres')) posture['ds-postgres'] = { network: 'ds_trap', inbound_only: true, read_only: true, cap_drop: ['ALL'], no_new_privileges: true, mem_limit: '256m', pids_limit: 128 };
   const doc = {
     sdk_version: SDK_VERSION,
     service: cfg.options.service,
@@ -62,7 +65,7 @@ export function renderManifest(cfg: ResolvedConfig, tokens: HoneytokenFile): str
       criticality: a.criticality,
     })),
     honeytokens: tokens.tokens.map((t) => ({ id: t.id, kind: t.kind, planted_in: t.planted_in })),
-    posture: POSTURE,
+    posture,
   };
   return `${JSON.stringify(doc, null, 2)}\n`;
 }

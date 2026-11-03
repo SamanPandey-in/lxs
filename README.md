@@ -13,7 +13,7 @@ A honeypot has no legitimate users, so *any* interaction with it is a near-zero-
 Three pieces, and only three:
 
 1. **The SDK** — `npm i lxs`. Declare decoys in `decoy.config.ts`; `npx lxs build` compiles them into `lxs.compose.yml`. Middleware routes decoy paths to an isolated container and enforces blocks inside the real app.
-2. **The sensor stack** — generated containers that run beside the app: a web decoy, a Cowrie SSH honeypot, and an agent that ships events with a Bearer key. The agent is the only component holding a credential; the platform never dials in.
+2. **The sensor stack** — generated containers that run beside the app: web, Cowrie SSH, Redis RESP, and synthetic PostgreSQL decoys plus an agent that ships events with a Bearer key. The agent is the only component holding a platform credential; the platform never dials in.
 3. **The platform** — a Fastify API (ingest, detection, incidents, response), PostgreSQL, and a React dashboard fed by Server-Sent Events.
 
 ### The moment that matters
@@ -121,6 +121,8 @@ cd apps/dashboard && npm install && npm run dev  # :3000
 docker build -f images/agent.Dockerfile           -t lxs/agent:0.1.0 .
 docker build -f images/decoy-web.Dockerfile       -t lxs/decoy-web:0.1.0 .
 docker build -f images/cowrie-personas.Dockerfile -t lxs/cowrie-personas:0.1.0 .
+docker build -f images/redis-decoy.Dockerfile     -t lxs/decoy-redis:0.1.0 .
+docker build -f images/postgres-decoy.Dockerfile  -t lxs/decoy-postgres:0.1.0 .
 
 cd examples/acme-shop
 cp .env.lxs.example .env.lxs        # paste the ingest key from the seed

@@ -1,4 +1,4 @@
-import type { ResolvedConfig, SshSpec } from '../types.js';
+import type { PostgresSpec, RedisSpec, ResolvedConfig, SshSpec } from '../types.js';
 import { GENERATED_HEADER, IMAGE_TAG } from '../version.js';
 import { COWRIE_BASE } from './cowrie.js';
 
@@ -23,6 +23,9 @@ export function volumeNames(cfg: ResolvedConfig): ComposeNames {
 /** Rendered as text (not via a YAML library) so anchors, comments and key order match BREAKDOWN 5.4 exactly. */
 export function renderCompose(cfg: ResolvedConfig): string {
   const ssh = cfg.decoys.filter((d): d is SshSpec => d.type === 'ssh');
+  const redis = cfg.decoys.filter((d): d is RedisSpec => d.type === 'redis');
+  const postgres = cfg.decoys.filter((d): d is PostgresSpec => d.type === 'postgres');
+  const netDecoys = [...ssh, ...redis, ...postgres];
   const hasWeb = cfg.decoys.some((d) => d.type === 'web-admin' || d.type === 'web-bait');
   const names = volumeNames(cfg);
   const L: string[] = [];
@@ -71,6 +74,8 @@ export function renderCompose(cfg: ResolvedConfig): string {
   );
   if (hasWeb) push('      - ds_web_logs:/var/log/lxs/web:ro');
   for (const s of ssh) push(`      - ${names.sshLogs(s)}:/var/log/lxs/${s.id}:ro`);
+  for (const s of redis) push(`      - ds_${sanitize(s.id)}_logs:/var/log/lxs/${s.id}:ro`);
+  for (const s of postgres) push(`      - ds_${sanitize(s.id)}_logs:/var/log/lxs/${s.id}:ro`);
   push(
     '      - ./.lxs/manifest.json:/etc/lxs/manifest.json:ro',
     '      - ./.lxs/secrets/honeytokens.json:/etc/lxs/honeytokens.json:ro',
@@ -122,8 +127,34 @@ export function renderCompose(cfg: ResolvedConfig): string {
     );
   }
 
+  for (const s of redis) {
+    push('', `  ds-${s.id}:`, '    <<: *ds-hardened',
+      `    image: \${LXS_REDIS_IMAGE:-ghcr.io/lxs/decoy-redis:${IMAGE_TAG}}`,
+      '    networks: [ds_trap]', `    ports: ["${s.port}:6379"]`,
+      '    mem_limit: 128m', '    cpus: 0.25', '    pids_limit: 64',
+      '    tmpfs: ["/tmp:size=8m,noexec,nosuid"]',
+      '    volumes:', `      - ds_${sanitize(s.id)}_logs:/var/log/lxs:rw`,
+      '    environment:', `      LXS_DECOY_ID: "${s.id}"`, `      LXS_REDIS_SEED: "${s.seed}"`,
+      `      LXS_REDIS_REQUIRE_PASSWORD: "${s.requirePassword ? '1' : '0'}"`);
+  }
+  for (const s of postgres) {
+    push('', `  ds-${s.id}:`, '    <<: *ds-hardened',
+      `    image: \${LXS_POSTGRES_IMAGE:-ghcr.io/lxs/decoy-postgres:${IMAGE_TAG}}`, '    networks: [ds_trap]',
+      `    ports: ["${s.port}:5432"]`, '    user: "70:70"', '    mem_limit: 256m', '    cpus: 0.5', '    pids_limit: 128',
+      '    environment:', '      POSTGRES_USER: postgres', '      POSTGRES_PASSWORD: postgres_fake_only',
+      `      POSTGRES_HOST_AUTH_METHOD: "${s.requirePassword ? 'scram-sha-256' : 'trust'}"`,
+      `      POSTGRES_DB: "${s.seed === 'shop' ? 'shop_prod' : 'finance'}"`,
+      '      PGDATA: /var/lib/postgresql/data',
+      '    command: ["postgres", "-c", "log_destination=jsonlog", "-c", "logging_collector=on", "-c", "log_directory=/var/log/lxs", "-c", "log_filename=postgres.log", "-c", "log_rotation_size=10MB", "-c", "log_connections=on", "-c", "log_disconnections=on", "-c", "log_min_messages=log", "-c", "max_connections=16", "-c", "shared_buffers=32MB", "-c", "work_mem=2MB", "-c", "temp_file_limit=16MB", "-c", "statement_timeout=10s"]',
+      '    tmpfs: ["/tmp:size=16m,noexec,nosuid", "/var/run/postgresql:size=1m,uid=70,gid=70,mode=0700", "/var/lib/postgresql/data:size=128m,uid=70,gid=70,mode=0700"]',
+      '    volumes:',
+      `      - ds_${sanitize(s.id)}_logs:/var/log/lxs`,
+      `      - ./.lxs/${s.id}/init.sql:/docker-entrypoint-initdb.d/10-lxs-seed.sql:ro`,
+      '    healthcheck:', `      test: ["CMD-SHELL", "pg_isready -U lxs_fake -d ${s.seed === 'shop' ? 'shop_prod' : 'finance'}"]`, '      interval: 30s', '      timeout: 5s', '      retries: 3');
+  }
+
   push('', 'networks:');
-  if (ssh.length > 0) {
+  if (netDecoys.length > 0) {
     push(
       '  ds_trap:',
       '    driver: bridge',
@@ -140,6 +171,8 @@ export function renderCompose(cfg: ResolvedConfig): string {
   push('  ds_agent_sock: {}');
   if (hasWeb) push('  ds_web_logs: {}');
   for (const s of ssh) push(`  ${names.sshLogs(s)}: {}`, `  ${names.sshData(s)}: {}`);
+  for (const s of redis) push(`  ds_${sanitize(s.id)}_logs: {}`);
+  for (const s of postgres) push(`  ds_${sanitize(s.id)}_logs: {}`);
   push('  ds_agent_state: {}', '');
   return L.join('\n');
 }

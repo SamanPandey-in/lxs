@@ -15,7 +15,11 @@ const opts = {
   salt: 'salt',
   commonCredsText: 'admin\nroot/root\npassword\n',
   simulated: false,
-  sshPorts: new Map([['ssh-db-backup-01', 22]]),
+  sshPorts: new Map([
+    ['ssh-db-backup-01', 22],
+    ['redis-6380', 6380],
+    ['postgres-5433', 5433],
+  ]),
   honeyReads: [
     { decoyId: 'ssh-db-backup-01', path: '/home/deploy/.config/acme.json', tokenId: 'ht_api_01' },
   ],
@@ -157,6 +161,60 @@ for (const impl of ['package', 'local'] as const) {
     assert.equal(e?.password_clear, undefined);
     assert.equal(e?.password_masked, 'Z***t');
     assert.equal(e?.password_sha256?.length, 64);
+  });
+}
+
+for (const impl of ['package', 'local'] as const) {
+  test(`normalizer (${impl}): Redis/Postgres JSON logs are bounded and redact arguments`, async () => {
+    const n = impl === 'package' ? await createNormalizer(opts) : createLocalNormalizer(opts);
+    const [redis] = n.normalize({
+      source: 'redis',
+      decoyId: 'redis-6380',
+      fileKey: 'redis/redis.jsonl',
+      offset: 10,
+      text: JSON.stringify({
+        ts: '2026-11-01T10:00:00Z', src_ip: '203.0.113.9', src_port: 50000,
+        command: 'set', key: 'synthetic-password', value: 'must-not-be-retained', outcome: 'success',
+      }),
+    });
+    assert.equal(redis?.sensor, 'redis');
+    assert.equal(redis?.event_type, 'db.command');
+    assert.equal(redis?.dst_service, 'redis:6380');
+    assert.equal(redis?.command, 'SET');
+    assert.equal(redis?.raw, undefined);
+    assert.equal(JSON.stringify(redis).includes('must-not-be-retained'), false);
+
+    const [failedAuth] = n.normalize({
+      source: 'postgres',
+      decoyId: 'postgres-5433',
+      fileKey: 'postgres/postgres.json',
+      offset: 20,
+      text: JSON.stringify({
+        timestamp: '2026-11-01 10:01:00 UTC', remote_host: '198.51.100.12', remote_port: '50001',
+        user: 'lxs_fake', error_severity: 'FATAL',
+        message: 'password authentication failed for user "lxs_fake"; password=must-not-be-retained',
+      }),
+    });
+    assert.equal(failedAuth?.sensor, 'postgres');
+    assert.equal(failedAuth?.event_type, 'auth.attempt');
+    assert.equal(failedAuth?.outcome, 'failure');
+    assert.equal(failedAuth?.dst_service, 'postgres:5433');
+    assert.equal(failedAuth?.username, 'lxs_fake');
+    assert.equal(JSON.stringify(failedAuth).includes('must-not-be-retained'), false);
+
+    const [statement] = n.normalize({
+      source: 'postgres',
+      decoyId: 'postgres-5433',
+      fileKey: 'postgres/postgres.json',
+      offset: 21,
+      text: JSON.stringify({
+        timestamp: '2026-11-01 10:02:00 UTC', remote_host: '198.51.100.12',
+        message: "statement: SELECT 'sql-literal-must-not-be-retained'",
+      }),
+    });
+    assert.equal(statement?.event_type, 'db.command');
+    assert.equal(statement?.command, 'SELECT');
+    assert.equal(JSON.stringify(statement).includes('sql-literal-must-not-be-retained'), false);
   });
 }
 

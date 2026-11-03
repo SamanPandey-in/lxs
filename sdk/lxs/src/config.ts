@@ -10,6 +10,8 @@ import type {
   HoneytokenSpec,
   LXSOptions,
   Path,
+  PostgresOptions,
+  PostgresSpec,
   RedisOptions,
   RedisSpec,
   ResolvedOptions,
@@ -103,6 +105,12 @@ export const SshSchema = z.object({
 export const RedisSchema = z.object({
   id: IdSchema.optional(),
   seed: z.enum(['finance', 'sessions']).optional(),
+  requirePassword: z.boolean().optional(),
+});
+
+export const PostgresSchema = z.object({
+  id: IdSchema.optional(),
+  seed: z.enum(['shop', 'finance']).optional(),
   requirePassword: z.boolean().optional(),
 });
 
@@ -285,6 +293,12 @@ export function resolveRedis(port: unknown, opts: RedisOptions | undefined): Red
   };
 }
 
+export function resolvePostgres(port: unknown, opts: PostgresOptions | undefined): PostgresSpec {
+  const p = validatePort(port);
+  const o = parseOrThrow(PostgresSchema, opts, 'E_OPTIONS', `postgres :${p}`);
+  return { type: 'postgres', id: o.id ?? `postgres-${p}`, port: p, seed: o.seed ?? 'shop', requirePassword: o.requirePassword ?? true };
+}
+
 export function resolveAsset(pattern: unknown, opts: AssetOptions | undefined): AssetSpec {
   if (typeof pattern !== 'string' || !pattern.startsWith('/') || /[?#\s]/.test(pattern)) {
     throw new LXSConfigError(
@@ -319,7 +333,8 @@ export type DeclarativeDecoy =
   | ({ type: 'web-admin'; path: Path } & WebAdminOptions)
   | ({ type: 'web-bait'; path: Path } & WebBaitOptions)
   | ({ type: 'ssh'; port: number } & SshOptions)
-  | ({ type: 'redis'; port: number } & RedisOptions);
+  | ({ type: 'redis'; port: number } & RedisOptions)
+  | ({ type: 'postgres'; port: number } & PostgresOptions);
 
 export interface DeclarativeConfig extends LXSOptions {
   decoys?: DeclarativeDecoy[];
@@ -351,6 +366,11 @@ export function defineConfig(config: DeclarativeConfig): LXS {
       case 'redis': {
         const { type: _t, port, ...rest } = d;
         t.create('redis', port, rest);
+        break;
+      }
+      case 'postgres': {
+        const { type: _t, port, ...rest } = d;
+        t.create('postgres', port, rest);
         break;
       }
       default:

@@ -1,0 +1,42 @@
+{
+  "generated_by": "lxs 0.1.0",
+  "version": 1,
+  "service": "shop",
+  "decoys": [
+    {
+      "id": "web-admin-admin",
+      "type": "web-admin",
+      "mount": "/admin",
+      "brand": "Acme Shop",
+      "acceptCredentials": [
+        [
+          "admin",
+          "admin"
+        ]
+      ],
+      "panel": "customers"
+    },
+    {
+      "id": "web-bait-env",
+      "type": "web-bait",
+      "mount": "/.env",
+      "template": "dotenv",
+      "breadcrumbs": true
+    },
+    {
+      "id": "web-bait-backup-sql",
+      "type": "web-bait",
+      "mount": "/backup.sql",
+      "template": "sql-dump",
+      "breadcrumbs": true
+    }
+  ],
+  "breadcrumbs": {
+    "ssh": {
+      "host": "db-backup-01",
+      "port": 2222,
+      "user": "deploy"
+    },
+    "adminMount": "/admin"
+  }
+}

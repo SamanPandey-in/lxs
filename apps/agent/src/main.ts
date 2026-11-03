@@ -113,7 +113,7 @@ async function main(): Promise<void> {
         type: d.type,
         mount: String(d.mount),
         ...(d.persona ? { persona: d.persona } : {}),
-        posture: (d.type === 'ssh' ? manifest.posture?.['ds-ssh'] : manifest.posture?.['ds-web']) as
+        posture: manifest.posture?.[d.type === 'ssh' ? 'ds-ssh' : d.type === 'redis' ? 'ds-redis' : d.type === 'postgres' ? 'ds-postgres' : 'ds-web'] as
           | Record<string, unknown>
           | undefined,
       })),
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
 
   // Normalisation.
   const sshPorts = new Map<string, number>();
-  for (const d of manifest.decoys) if (d.type === 'ssh') sshPorts.set(d.id, Number(d.mount));
+  for (const d of manifest.decoys) if (['ssh', 'redis', 'postgres'].includes(d.type)) sshPorts.set(d.id, Number(d.mount));
   const honeyReads: HoneyRead[] = [];
   for (const t of manifest.honeytokens ?? []) {
     for (const p of t.planted_in ?? []) {
@@ -208,6 +208,8 @@ async function main(): Promise<void> {
         match: /^cowrie\.json$/,
         decoyId: d.id,
       });
+    if (d.type === 'redis') sources.push({ kind: 'redis', dir: path.join(cfg.logDir, d.id), match: /^redis\.jsonl$/, decoyId: d.id });
+    if (d.type === 'postgres') sources.push({ kind: 'postgres', dir: path.join(cfg.logDir, d.id), match: /^postgres\.json$/, decoyId: d.id });
   }
 
   tail = new TailManager({
@@ -238,7 +240,9 @@ async function main(): Promise<void> {
       const file =
         d.type === 'ssh'
           ? path.join(cfg.logDir, d.id, 'cowrie.json')
-          : path.join(cfg.logDir, 'web', 'ds-web.jsonl');
+          : d.type === 'redis' ? path.join(cfg.logDir, d.id, 'redis.jsonl')
+            : d.type === 'postgres' ? path.join(cfg.logDir, d.id, 'postgres.json')
+              : path.join(cfg.logDir, 'web', 'ds-web.jsonl');
       return { decoy_key: d.id, status: fs.existsSync(file) ? 'healthy' : 'degraded' };
     });
   const beat = async (): Promise<void> => {

@@ -283,6 +283,8 @@ async function sensors(projectId, customKey = false) {
       ['images/agent.Dockerfile', 'lxs/agent:0.1.0'],
       ['images/decoy-web.Dockerfile', 'lxs/decoy-web:0.1.0'],
       ['images/cowrie-personas.Dockerfile', 'lxs/cowrie-personas:0.1.0'],
+      ['images/redis-decoy.Dockerfile', 'lxs/decoy-redis:0.1.0'],
+      ['images/postgres-decoy.Dockerfile', 'lxs/decoy-postgres:0.1.0'],
     ];
     for (const [file, tag] of images) {
       note(`building ${tag}`);
@@ -292,7 +294,7 @@ async function sensors(projectId, customKey = false) {
         return;
       }
     }
-    ok('three images built');
+    ok('sensor images built');
   }
 
   step('Generating the decoy stack from decoy.config.ts');
@@ -312,6 +314,8 @@ async function sensors(projectId, customKey = false) {
     LXS_AGENT_IMAGE: 'lxs/agent:0.1.0',
     LXS_WEB_IMAGE: 'lxs/decoy-web:0.1.0',
     LXS_COWRIE_IMAGE: 'lxs/cowrie-personas:0.1.0',
+    LXS_REDIS_IMAGE: 'lxs/decoy-redis:0.1.0',
+    LXS_POSTGRES_IMAGE: 'lxs/decoy-postgres:0.1.0',
   };
   const r = run(
     'docker',

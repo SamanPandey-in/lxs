@@ -1,0 +1,132 @@
+{
+  "sdk_version": "0.1.0",
+  "service": "shop",
+  "mode": "enforce",
+  "decoys": [
+    {
+      "id": "web-admin-admin",
+      "type": "web-admin",
+      "mount": "/admin"
+    },
+    {
+      "id": "web-bait-env",
+      "type": "web-bait",
+      "mount": "/.env",
+      "template": "dotenv"
+    },
+    {
+      "id": "web-bait-backup-sql",
+      "type": "web-bait",
+      "mount": "/backup.sql",
+      "template": "sql-dump"
+    },
+    {
+      "id": "ssh-db-backup-01",
+      "type": "ssh",
+      "mount": 2222,
+      "persona": "db-backup",
+      "hostname": "db-backup-01"
+    },
+    {
+      "id": "redis-6380",
+      "type": "redis",
+      "mount": 6380
+    },
+    {
+      "id": "postgres-5433",
+      "type": "postgres",
+      "mount": 5433
+    }
+  ],
+  "assets": [
+    {
+      "pattern": "/api/payments/*",
+      "name": "Payments API",
+      "criticality": "critical"
+    },
+    {
+      "pattern": "/api/*",
+      "name": "Shop API",
+      "criticality": "normal"
+    }
+  ],
+  "honeytokens": [
+    {
+      "id": "ht_api_01",
+      "kind": "api_key",
+      "planted_in": [
+        "web:/admin",
+        "web:/.env",
+        "web:/backup.sql",
+        "ssh-db-backup-01:/home/deploy/.config/acme.json"
+      ]
+    },
+    {
+      "id": "ht_db_01",
+      "kind": "db_url",
+      "planted_in": [
+        "web:/admin",
+        "web:/.env",
+        "web:/backup.sql"
+      ]
+    }
+  ],
+  "posture": {
+    "ds-web": {
+      "network": "none",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "user": "10002",
+      "mem_limit": "128m",
+      "pids_limit": 64
+    },
+    "ds-ssh": {
+      "network": "ds_trap",
+      "inbound_only": true,
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "mem_limit": "256m",
+      "pids_limit": 128
+    },
+    "ds-agent": {
+      "network": "ds_uplink",
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "user": "10001",
+      "mem_limit": "256m",
+      "pids_limit": 128
+    },
+    "ds-redis": {
+      "network": "ds_trap",
+      "inbound_only": true,
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "user": "10001",
+      "mem_limit": "128m",
+      "pids_limit": 64
+    },
+    "ds-postgres": {
+      "network": "ds_trap",
+      "inbound_only": true,
+      "read_only": true,
+      "cap_drop": [
+        "ALL"
+      ],
+      "no_new_privileges": true,
+      "mem_limit": "256m",
+      "pids_limit": 128
+    }
+  }
+}

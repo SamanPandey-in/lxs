@@ -51,6 +51,42 @@ test('compose output keeps the containment posture from BREAKDOWN 5.4', () => {
   assert.deepEqual(doc.services['ds-ssh-db-backup-01'].ports, ['22:2222']);
 });
 
+test('Redis and Postgres render as isolated, bounded network decoys', () => {
+  const cfg = new LXS({ service: 'shop' })
+    .create('redis', 6380, { seed: 'finance', requirePassword: true })
+    .create('postgres', 5433, { seed: 'shop', requirePassword: true })
+    .resolve();
+  const generated = generateAll(cfg);
+  const doc = parseYaml(generated.committed.get('lxs.compose.yml') as string, { merge: true }) as any;
+  const redis = doc.services['ds-redis-6380'];
+  const postgres = doc.services['ds-postgres-5433'];
+
+  assert.equal(redis.read_only, true);
+  assert.deepEqual(redis.cap_drop, ['ALL']);
+  assert.deepEqual(redis.networks, ['ds_trap']);
+  assert.deepEqual(redis.ports, ['6380:6379']);
+  assert.equal(redis.environment.LXS_REDIS_REQUIRE_PASSWORD, '1');
+  assert.equal(redis.env_file, undefined);
+
+  assert.equal(postgres.read_only, true);
+  assert.equal(postgres.user, '70:70');
+  assert.deepEqual(postgres.cap_drop, ['ALL']);
+  assert.deepEqual(postgres.networks, ['ds_trap']);
+  assert.deepEqual(postgres.ports, ['5433:5432']);
+  assert.equal(postgres.environment.POSTGRES_HOST_AUTH_METHOD, 'scram-sha-256');
+  assert.equal(postgres.env_file, undefined);
+  assert.ok((postgres.tmpfs as string[]).some((v) => v.startsWith('/var/lib/postgresql/data:size=128m')));
+  assert.match(postgres.command.join(' '), /max_connections=16/);
+  assert.match(postgres.command.join(' '), /temp_file_limit=16MB/);
+  assert.ok((postgres.volumes as string[]).some((v) => v.includes('init.sql:') && v.endsWith(':ro')));
+  const initSql = generated.committed.get('.lxs/postgres-5433/init.sql') as string;
+  assert.ok(initSql.includes('ALTER ROLE postgres NOLOGIN'));
+  assert.ok(initSql.includes('GRANT SELECT ON ALL TABLES'));
+  assert.ok(!initSql.includes('GRANT INSERT'));
+  assert.equal(doc.networks.ds_trap.driver_opts['com.docker.network.bridge.enable_ip_masquerade'], 'false');
+  assert.equal(doc.networks.ds_trap.driver_opts['com.docker.network.bridge.enable_icc'], 'false');
+});
+
 test('no secret or key ever lands in committed output; plaintext goes to the secrets dir', () => {
   const g = generateAll(demo().resolve());
   const token = g.honeytokens.tokens.find((t) => t.kind === 'api_key')?.value as string;
