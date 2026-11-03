@@ -2,9 +2,10 @@ import { buildApp } from './app.js';
 import { sql } from './db/client.js';
 import { runMigrations } from './db/migrate.js';
 import { env, roleHasApi, roleHasWorker } from './env.js';
-import { setInProcessProcessor, startBoss, stopBoss } from './jobs/queue.js';
+import { setInProcessNarrator, setInProcessProcessor, startBoss, stopBoss } from './jobs/queue.js';
 import { hub } from './plugins/sse.js';
 import { startWorker, stopWorker } from './worker/index.js';
+import { narrateIncident } from './worker/narrator.js';
 import { processEvents } from './worker/process-events.js';
 
 async function main(): Promise<void> {
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   if (roleHasApi) {
     await hub.start(log);
     setInProcessProcessor(processEvents); // used only if pg-boss is down and this is an API node
+    setInProcessNarrator(narrateIncident);
   }
   if (roleHasWorker) await startWorker(log);
 

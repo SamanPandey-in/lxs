@@ -7,7 +7,12 @@ export const QUEUES = {
   blocklistExpiry: 'blocklist-expiry',
   autoCloseNoise: 'auto-close-noise',
   retentionPurge: 'retention-purge',
+  narrateIncident: 'narrate-incident',
 } as const;
+
+export interface NarrateIncidentJob {
+  incidentId: string;
+}
 
 export interface ProcessEventsJob {
   projectId?: string;
@@ -78,5 +83,46 @@ export async function enqueueProcessEvents(job: ProcessEventsJob): Promise<void>
   if (inProcess) {
     const fn = inProcess;
     setImmediate(() => void fn(job).catch(() => {}));
+  }
+}
+
+type Narrator = (incidentId: string) => Promise<unknown>;
+let inProcessNarrator: Narrator | null = null;
+const narrateTimers = new Map<string, NodeJS.Timeout>();
+export const setInProcessNarrator = (fn: Narrator): void => {
+  inProcessNarrator = fn;
+};
+
+/**
+ * Ask for an incident to be narrated once the burst settles. A chain of events costs one
+ * provider call per window, not one per batch: later batches in a window are dropped, and
+ * the job still sees them because it reads the incident when it runs, after the window ends.
+ */
+export async function enqueueNarrate(incidentId: string): Promise<void> {
+  const seconds = env.LLM_DEBOUNCE_SECONDS;
+  const b = getBoss();
+  if (b) {
+    try {
+      await b.send(
+        QUEUES.narrateIncident,
+        { incidentId } satisfies NarrateIncidentJob,
+        seconds > 0
+          ? { singletonKey: incidentId, singletonSeconds: seconds, startAfter: seconds }
+          : {},
+      );
+      return;
+    } catch {
+      /* fall through to in-process */
+    }
+  }
+  if (inProcessNarrator && !narrateTimers.has(incidentId)) {
+    const fn = inProcessNarrator;
+    narrateTimers.set(
+      incidentId,
+      setTimeout(() => {
+        narrateTimers.delete(incidentId);
+        void fn(incidentId).catch(() => {});
+      }, seconds * 1000),
+    );
   }
 }

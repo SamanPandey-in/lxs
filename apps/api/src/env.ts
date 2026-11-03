@@ -25,9 +25,17 @@ const EnvSchema = z.object({
   DEV_AUTH_BYPASS: bool,
   INGEST_RATE_PER_MIN: z.coerce.number().int().positive().default(1200),
   INGEST_PROJECT_EVENTS_PER_MIN: z.coerce.number().int().positive().default(100_000),
-  INGEST_PROJECT_BYTES_PER_MIN: z.coerce.number().int().positive().default(256 * 1024 * 1024),
+  INGEST_PROJECT_BYTES_PER_MIN: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(256 * 1024 * 1024),
   INGEST_SENSOR_EVENTS_PER_MIN: z.coerce.number().int().positive().default(20_000),
-  INGEST_SENSOR_BYTES_PER_MIN: z.coerce.number().int().positive().default(64 * 1024 * 1024),
+  INGEST_SENSOR_BYTES_PER_MIN: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(64 * 1024 * 1024),
   API_RATE_PER_MIN: z.coerce.number().int().positive().default(1200),
   MAX_BODY_BYTES: z.coerce
     .number()
@@ -36,9 +44,15 @@ const EnvSchema = z.object({
     .default(2 * 1024 * 1024),
   PUBLIC_URL: z.string().default('http://localhost:8080'),
   DEMO_MODE: bool,
-  // Optional, unused at boot: the API never needs these to start.
+  // Optional: without a real key every incident keeps its deterministic template summary.
   LLM_PROVIDER: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
+  LLM_MODEL: z.string().optional(),
+  LLM_BASE_URL: z.string().optional(),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  // Provider calls per project per UTC day; past it, incidents get the template.
+  LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(200),
+  LLM_DEBOUNCE_SECONDS: z.coerce.number().int().nonnegative().default(15),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

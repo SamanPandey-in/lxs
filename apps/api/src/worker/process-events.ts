@@ -2,7 +2,7 @@ import type { DecoyEvent, Detection } from '@lxs/schema';
 import { and, asc, sql as dsql, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { db, type Tx } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
-import type { ProcessEventsJob } from '../jobs/queue.js';
+import { enqueueNarrate, type ProcessEventsJob } from '../jobs/queue.js';
 import { sha256hex } from '../lib/crypto.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
@@ -12,6 +12,8 @@ import {
   type DetectionContext,
   loadDetection,
 } from './detection.js';
+import { buildTemplateSummary } from './narrative.js';
+import { llmConfig } from './narrator.js';
 
 const INACTIVITY_MS = 24 * 3600 * 1000;
 const MAX_PER_RUN = 5000;
@@ -91,7 +93,10 @@ export async function processEvents(
   let firstError: unknown;
   for (const g of groups.values()) {
     try {
-      processed += await processGroup(g.projectId, g.srcIp, g.ids);
+      const { count, incidentId } = await processGroup(g.projectId, g.srcIp, g.ids);
+      processed += count;
+      // After commit, so a slow narrator can never hold up or roll back a verdict.
+      if (incidentId && llmConfig) await enqueueNarrate(incidentId);
     } catch (err) {
       firstError ??= err;
       console.error('[process-events] group failed', g.projectId, g.srcIp, err);
@@ -101,7 +106,11 @@ export async function processEvents(
   return { processed, groups: groups.size };
 }
 
-async function processGroup(projectId: string, srcIp: string, ids: string[]): Promise<number> {
+async function processGroup(
+  projectId: string,
+  srcIp: string,
+  ids: string[],
+): Promise<{ count: number; incidentId: string | null }> {
   const det = await loadDetection();
   const entityKey = `ip:${srcIp}`;
 
@@ -116,7 +125,7 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
       .from(events)
       .where(and(inArray(events.id, ids), isNull(events.processedAt)))
       .orderBy(asc(events.occurredAt), asc(events.id));
-    if (rows.length === 0) return 0;
+    if (rows.length === 0) return { count: 0, incidentId: null };
 
     // Allowlisted sources are stored but never raise incidents.
     const allow = (await tx.execute(
@@ -132,7 +141,7 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
             rows.map((r) => r.id),
           ),
         );
-      return rows.length;
+      return { count: rows.length, incidentId: null };
     }
 
     const baseCtx: DetectionContext = {
@@ -248,7 +257,7 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
             })),
           })})`,
         );
-        return rows.length;
+        return { count: rows.length, incidentId: null };
       }
     }
 
@@ -313,6 +322,9 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
       isNew = true;
     }
     const incidentId = incident.id;
+    // An AI summary stays up while it is refreshed: dropping back to the template on every
+    // batch would flicker during a live attack. The narrator replaces it within one window.
+    const hasAiSummary = incident.aiStatus === 'ready';
 
     // A low-signal source can become significant later. Promote its retained
     // events alongside the triggering batch so the incident timeline and
@@ -418,12 +430,12 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
         eventCount,
         firstEventAt: first,
         lastEventAt: last,
-        aiStatus: 'fallback',
+        aiStatus: hasAiSummary ? 'ready' : 'fallback',
         updatedAt: dsql`now()`,
       })
       .where(eq(incidents.id, incidentId));
 
-    await upsertFallbackSummary(tx, incidentId, srcIp, verdict, eventCount);
+    if (!hasAiSummary) await upsertFallbackSummary(tx, incidentId, srcIp, verdict, eventCount);
 
     // Attacker rollup.
     const cadence = verdict.detections.some((d) => d.rule_id === 'R13')
@@ -497,9 +509,9 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
         simulated: t.row.simulated,
       })),
     });
-    await notify('incident.ai', { id: incidentId, status: 'fallback' });
+    await notify('incident.ai', { id: incidentId, status: hasAiSummary ? 'ready' : 'fallback' });
 
-    return rows.length;
+    return { count: rows.length, incidentId };
   });
 }
 
@@ -534,7 +546,7 @@ function makeTitle(ip: string, v: ChainResult): string {
     : `${label} activity from ${ip}`;
 }
 
-/** Deterministic template narrative (no LLM). The narrator job can later add a non-fallback row. */
+/** The instant summary every incident gets. The narrator job then replaces it if an LLM answers. */
 async function upsertFallbackSummary(
   tx: Tx,
   incidentId: string,
@@ -542,33 +554,16 @@ async function upsertFallbackSummary(
   v: ChainResult,
   eventCount: number,
 ): Promise<void> {
-  const reasons = v.detections
-    .filter((d) => d.points > 0 || d.floor)
-    .map((d) => d.reason)
-    .slice(0, 6);
-  const actions: string[] = [];
-  if (
-    v.label !== 'noise' &&
-    (v.severity === 'high' || v.severity === 'critical' || v.label === 'targeted')
-  )
-    actions.push('block_ip');
-  actions.push('export_iocs');
-  if (v.realAssetReached) actions.push('review_asset_logs');
-  if (v.honeytokenUsed || v.detections.some((d) => d.rule_id === 'R06'))
-    actions.push('rotate_credentials');
-  if (v.label === 'noise') actions.splice(0, actions.length, 'no_action');
-
-  const output = {
-    headline: `${v.severity.toUpperCase()}: ${v.label} source ${ip}`,
-    what_happened: `${ip} generated ${eventCount} event${eventCount === 1 ? '' : 's'} across ${v.stagesReached.length || 1} kill-chain stage${v.stagesReached.length === 1 ? '' : 's'}. ${reasons.length ? `Signals: ${reasons.join('; ')}.` : 'Only background scanning activity was seen.'}`,
-    why_it_matters: v.realAssetReached
-      ? 'The same source that probed the decoys then reached a real application asset, so this is a live, targeted threat.'
-      : v.label === 'noise'
-        ? 'Internet background noise that touched a decoy; no access was gained.'
-        : 'The source interacted with decoys in a way that real users never do. Decoys never see legitimate traffic.',
-    recommended_actions: actions,
-    is_fallback: true,
-  };
+  const output = buildTemplateSummary({
+    ip,
+    severity: v.severity,
+    label: v.label,
+    stages: v.stagesReached,
+    eventCount,
+    realAssetReached: v.realAssetReached,
+    honeytokenUsed: v.honeytokenUsed,
+    detections: v.detections,
+  });
   const fingerprint = sha256hex(
     JSON.stringify({
       incidentId,

@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { loadConfig } from "@/lib/config";
 import { coreUrl, setActiveProject } from "@/lib/core";
 
 function Form({ signup }) {
@@ -20,6 +21,8 @@ function Form({ signup }) {
     setError("");
     setBusy(true);
     try {
+      // Runtime config first: until it loads, coreUrl() is only the build-time default.
+      await loadConfig();
       const response = await fetch(`${coreUrl()}/v1/auth/${signup ? "signup" : "login"}`, {
         method: "POST",
         credentials: "include",

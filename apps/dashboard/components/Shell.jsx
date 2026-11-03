@@ -7,6 +7,7 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
+import { loadConfig } from "../lib/config";
 import { api, coreUrl, resolveProject, setActiveProject } from "../lib/core";
 import { useApiProblem, useDemo } from "../lib/hooks";
 import { NAV } from "../lib/nav";
@@ -64,7 +65,9 @@ export default function Shell({ children }) {
   useEffect(() => {
     if (isPublic) return;
     let active = true;
-    fetch(`${coreUrl()}/v1/me`, { credentials: "include", cache: "no-store" })
+    // Runtime config first: until it loads, coreUrl() is only the build-time default.
+    loadConfig()
+      .then(() => fetch(`${coreUrl()}/v1/me`, { credentials: "include", cache: "no-store" }))
       .then((response) => {
         if (!active) return;
         if (response.ok) setAuthState("authenticated");

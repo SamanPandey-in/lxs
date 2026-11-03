@@ -1,11 +1,12 @@
 import type { IncidentSummary } from '@lxs/schema';
-import { attackers, incidents } from '../db/schema.js';
+import { sql } from 'drizzle-orm';
+import { aiSummaries, attackers, incidents } from '../db/schema.js';
 
 export const iso = (d: Date | string | null | undefined): string | null =>
   d == null ? null : (d instanceof Date ? d : new Date(d)).toISOString();
 
 /** Columns needed for an IncidentSummary (join incidents x attackers). */
-export const incidentSummaryCols = {
+const summaryCols = {
   id: incidents.id,
   projectId: incidents.projectId,
   number: incidents.number,
@@ -31,9 +32,18 @@ export const incidentSummaryCols = {
   assigneeId: incidents.assigneeId,
 };
 
-export type IncidentRow = {
-  [K in keyof typeof incidentSummaryCols]: (typeof incidentSummaryCols)[K]['_']['data'];
+export const incidentSummaryCols = {
+  ...summaryCols,
+  aiHeadline: sql<
+    string | null
+  >`(select s.output->>'headline' from ${aiSummaries} s where s.incident_id = ${incidents.id} order by s.created_at desc limit 1)`.as(
+    'ai_headline',
+  ),
 };
+
+export type IncidentRow = {
+  [K in keyof typeof summaryCols]: (typeof summaryCols)[K]['_']['data'];
+} & { aiHeadline: string | null };
 
 export function toIncidentSummary(r: IncidentRow): IncidentSummary {
   return {
@@ -53,6 +63,7 @@ export function toIncidentSummary(r: IncidentRow): IncidentSummary {
     first_event_at: iso(r.firstEventAt)!,
     last_event_at: iso(r.lastEventAt)!,
     ai_status: r.aiStatus as IncidentSummary['ai_status'],
+    ai_headline: r.aiHeadline,
   };
 }
 

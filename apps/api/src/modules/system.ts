@@ -1,13 +1,14 @@
-import { and, count, eq, inArray, isNull } from 'drizzle-orm';
+import { and, count, sql as dsql, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { db, sql as rawSql } from '../db/client.js';
-import { events, incidents, memberships, projects, sensors } from '../db/schema.js';
+import { aiSummaries, events, incidents, memberships, projects, sensors } from '../db/schema.js';
 import { env } from '../env.js';
 import { getBoss } from '../jobs/queue.js';
 import { forbidden, HttpError } from '../lib/errors.js';
 import { requireSession, userOrgs } from '../plugins/auth-session.js';
 import { hub } from '../plugins/sse.js';
 import { detectionSource } from '../worker/detection.js';
+import { llmConfig } from '../worker/narrator.js';
 
 const startedAt = Date.now();
 
@@ -59,6 +60,31 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       incidents: Number(incidentCount[0]?.value ?? 0),
       sensors_online: Number(sensorCount[0]?.value ?? 0),
     };
+    // Template rows have provider 'template'; a failed provider call is stored under the provider.
+    const [llm] = projectIds.length
+      ? await db
+          .select({
+            calls: dsql<number>`count(*)::int`,
+            fallbacks: dsql<number>`(count(*) filter (where ${aiSummaries.isFallback}))::int`,
+            p50: dsql<
+              number | null
+            >`percentile_cont(0.5) within group (order by ${aiSummaries.latencyMs})`,
+            p95: dsql<
+              number | null
+            >`percentile_cont(0.95) within group (order by ${aiSummaries.latencyMs})`,
+          })
+          .from(aiSummaries)
+          .innerJoin(incidents, eq(incidents.id, aiSummaries.incidentId))
+          .where(
+            and(
+              inArray(incidents.projectId, projectIds),
+              dsql`${aiSummaries.provider} <> 'template'`,
+              dsql`${aiSummaries.createdAt} > now() - interval '24 hours'`,
+            ),
+          )
+      : [];
+    const calls = llm?.calls ?? 0;
+    const fallbacks = llm?.fallbacks ?? 0;
     return {
       version: '0.1.0',
       role: env.ROLE,
@@ -68,6 +94,15 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       detection: detectionSource,
       stream_connections: hub.connections,
       counts: c,
+      llm: {
+        provider: llmConfig?.provider ?? null,
+        model: llmConfig?.model ?? null,
+        calls_24h: calls,
+        fallbacks_24h: fallbacks,
+        success_rate: calls ? (calls - fallbacks) / calls : 0,
+        p50_ms: Math.round(Number(llm?.p50 ?? 0)),
+        p95_ms: Math.round(Number(llm?.p95 ?? 0)),
+      },
       auth: { dev_bypass: env.DEV_AUTH_BYPASS },
     };
   });

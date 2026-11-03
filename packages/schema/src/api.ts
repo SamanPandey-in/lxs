@@ -57,6 +57,7 @@ export const IncidentSummary = z.object({
   first_event_at: z.string().datetime(),
   last_event_at: z.string().datetime(),
   ai_status: z.enum(['pending', 'ready', 'fallback', 'failed']).default('pending'),
+  ai_headline: z.string().nullable().optional(),
 });
 export type IncidentSummary = z.infer<typeof IncidentSummary>;
 
@@ -124,6 +125,7 @@ export const Overview = z.object({
   decoys_total: z.number().int(),
   mtta_seconds: z.number().nullable(),
   top_incidents: z.array(IncidentSummary),
+  llm: z.object({ provider: z.string().nullable(), model: z.string().nullable() }).optional(),
 });
 export type Overview = z.infer<typeof Overview>;
 

@@ -13,6 +13,7 @@ import { parse } from '../lib/parse.js';
 import { type IncidentRow, incidentSummaryCols, iso, toIncidentSummary } from '../lib/serialize.js';
 import { isUuid, projectAccess, requireSession, userOrgs } from '../plugins/auth-session.js';
 import { evictKeyCache } from '../plugins/bearer-key.js';
+import { llmConfig } from '../worker/narrator.js';
 import { slugify } from './auth.js';
 
 /**
@@ -341,6 +342,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       ...o!,
       mtta_seconds: o!.mtta_seconds ?? null,
       top_incidents: top.map(toIncidentSummary),
+      llm: { provider: llmConfig?.provider ?? null, model: llmConfig?.model ?? null },
     };
   });
 }

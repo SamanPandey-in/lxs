@@ -244,6 +244,7 @@ The decoys are sensors, never a pivot:
 
 ## Status
 
-Phases 0–7 are built and verified end to end. Not done: the LLM narrator, real auth,
+Phases 0–7 and the LLM narrator are built. The narrator has been tested against a stand-in
+provider, not yet a real one: set a real `LLM_API_KEY` to turn it on. Not done: real auth,
 notifications, and proving containment on Linux. See **`docs/PROGRESS.md`** for where
 things stand against the plan and what is left, in the order worth doing it.
