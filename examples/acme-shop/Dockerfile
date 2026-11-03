@@ -7,7 +7,8 @@ COPY pnpm-lock.yaml* ./
 COPY sdk/lxs sdk/lxs
 COPY examples/acme-shop examples/acme-shop
 RUN pnpm install --no-frozen-lockfile --filter acme-shop... \
- && pnpm --filter lxs build
+ && pnpm install --no-frozen-lockfile --filter ./sdk/lxs \
+ && pnpm --filter ./sdk/lxs build
 
 FROM node:22-alpine
 WORKDIR /repo

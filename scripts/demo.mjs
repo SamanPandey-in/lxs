@@ -24,7 +24,12 @@ const EXAMPLE = join(ROOT, 'examples/acme-shop');
 const PLATFORM_COMPOSE = join(ROOT, 'infra/platform/docker-compose.platform.yml');
 const API = process.env.API_URL ?? 'http://localhost:8080';
 const DEV_KEY = 'ds_dev_0000000000000000000000000000000000000000';
+// attacker-api now requires a control token on /run, /http, /ssh and /reset.
+// Both processes must get the same value or every scenario click 401s while
+// /health still reports healthy. Override with ATTACKER_API_TOKEN.
+const ATTACKER_TOKEN = process.env.ATTACKER_API_TOKEN ?? 'demo-local-attacker-control-token';
 const DEMO_EMAIL = process.env.LXS_DEMO_EMAIL ?? 'demo@lxs.dev';
+const DEMO_USERNAME = process.env.LXS_DEMO_USERNAME ?? process.env.LXS_DEMO_EMAIL ?? 'demo-analyst';
 const DEMO_PASSWORD = process.env.LXS_DEMO_PASSWORD ?? 'demo1234';
 const WIN = process.platform === 'win32';
 const npm = WIN ? 'npm.cmd' : 'npm';
@@ -94,10 +99,11 @@ const dockerUp = () => run('docker', ['info'], { quiet: true }).status === 0;
  * so they work the same whether the build happened here or on a CI box. The
  * NEXT_PUBLIC_* twins are the pre-boot defaults baked into the bundle.
  */
-const dashEnv = (projectId) => ({
+const dashEnv = () => ({
   LXS_API_URL: API,
-  LXS_PROJECT_ID: projectId,
+  LXS_PROJECT_ID: process.env.LXS_PROJECT_ID ?? '',
   NEXT_PUBLIC_API_URL: API,
+  NEXT_PUBLIC_PROJECT_ID: process.env.LXS_PROJECT_ID ?? '',
 });
 
 /** True when the Postgres container actually publishes 5432 to the host. */
@@ -108,11 +114,33 @@ function hostPortBound() {
   return r.status === 0 && (r.stdout ?? '').trim().length > 0;
 }
 
+/** Keep a user's Settings-created key while making this local demo point at its API. */
+function configureAgentEnv() {
+  const envFile = join(EXAMPLE, '.env.lxs');
+  const lines = existsSync(envFile) ? readFileSync(envFile, 'utf8').split(/\r?\n/) : [];
+  const valueOf = (name) => {
+    const line = lines.find((entry) => entry.startsWith(`${name}=`));
+    return line?.slice(name.length + 1).trim() ?? '';
+  };
+  const set = (name, value, force = false) => {
+    const i = lines.findIndex((entry) => entry.startsWith(`${name}=`));
+    if (i < 0) lines.push(`${name}=${value}`);
+    else if (force || !lines[i].slice(name.length + 1).trim()) lines[i] = `${name}=${value}`;
+  };
+
+  const existingKey = valueOf('LXS_INGEST_KEY');
+  const key = existingKey || DEV_KEY;
+  set('LXS_INGEST_KEY', key);
+  set('LXS_ENDPOINT', process.env.LXS_ENDPOINT ?? 'http://host.docker.internal:8080', true);
+  writeFileSync(envFile, `${lines.filter((line, i) => line || i < lines.length - 1).join('\n')}\n`);
+  return { key, isCustomKey: key !== DEV_KEY };
+}
+
 async function resolveProject() {
   const login = await fetch(`${API}/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
+    body: JSON.stringify({ identifier: DEMO_USERNAME, password: DEMO_PASSWORD }),
   }).catch(() => null);
   if (!login?.ok) {
     const detail = login ? `HTTP ${login.status}` : 'API connection failed';
@@ -185,6 +213,10 @@ async function up() {
   }
   run(pnpm, ['--filter', '@lxs/api', 'db:migrate'], { cwd: ROOT });
   run(pnpm, ['--filter', '@lxs/api', 'db:seed'], { cwd: ROOT });
+  const agentConfig = configureAgentEnv();
+  if (agentConfig.isCustomKey) {
+    note('preserving the configured ingest key; the API assigns its events to that key’s project');
+  }
 
   step('Starting the platform API');
   if (!(await httpOk(`${API}/healthz`))) {
@@ -192,12 +224,12 @@ async function up() {
   }
   if (!(await waitFor(`API ready at ${API}`, () => httpOk(`${API}/readyz`), 60))) process.exit(1);
 
-  const projectId = await resolveProject();
-  if (!projectId) {
-    fail('could not resolve the acme-shop project — did the seed run?');
+  const projectId = agentConfig.isCustomKey ? null : await resolveProject();
+  if (!agentConfig.isCustomKey && !projectId) {
+    fail('could not resolve the demo project — did the seed run?');
     process.exit(1);
   }
-  ok(`project acme-shop = ${projectId}`);
+  if (projectId) ok(`demo project = ${projectId}`);
 
   // The dashboard is served from a PRODUCTION build by default. `next dev` compiles
   // each route the first time it is opened, which costs 0.6-2.6 s per screen — in
@@ -217,15 +249,15 @@ async function up() {
         run(npm, ['install'], { cwd: dashDir, quiet: true });
       }
       if (
-        run(npm, ['run', 'build'], { cwd: dashDir, env: { ...process.env, ...dashEnv(projectId) } })
+        run(npm, ['run', 'build'], { cwd: dashDir, env: { ...process.env, ...dashEnv() } })
           .status !== 0
       ) {
         fail('dashboard build failed — falling back to dev mode');
-        detach('dashboard', npm, ['run', 'dev'], dashDir, dashEnv(projectId));
+        detach('dashboard', npm, ['run', 'dev'], dashDir, dashEnv());
       } else {
         ok('production build ready');
         step('Starting the SOC dashboard');
-        detach('dashboard', npm, ['run', 'start'], dashDir, dashEnv(projectId));
+        detach('dashboard', npm, ['run', 'start'], dashDir, dashEnv());
       }
     }
   } else {
@@ -234,15 +266,15 @@ async function up() {
   }
   await waitFor('Dashboard at http://localhost:3000', () => httpOk('http://localhost:3000'), 180);
 
-  if (!flags.has('--no-sensors')) await sensors(projectId);
+  if (!flags.has('--no-sensors') && !(await sensors(projectId, agentConfig.isCustomKey))) process.exit(1);
   if (!flags.has('--no-attacker')) await attacker();
 
-  banner(projectId);
+  banner(projectId, agentConfig.isCustomKey);
 }
 
 // ------------------------------------------------------------- sensors
 
-async function sensors(projectId) {
+async function sensors(projectId, customKey = false) {
   step('Building the decoy images');
   if (flags.has('--no-images')) {
     note('skipped (--no-images)');
@@ -264,27 +296,16 @@ async function sensors(projectId) {
   }
 
   step('Generating the decoy stack from decoy.config.ts');
-  const envFile = join(EXAMPLE, '.env.lxs');
-  if (existsSync(envFile)) {
-    note('.env.lxs already exists, left alone');
-  } else {
-    writeFileSync(
-      envFile,
-      '# generated by scripts/demo.mjs — DEV ONLY\n' +
-        `LXS_INGEST_KEY=${DEV_KEY}\n` +
-        // From inside a container, the host API is host.docker.internal on Docker Desktop.
-        `LXS_ENDPOINT=${process.env.LXS_ENDPOINT ?? 'http://host.docker.internal:8080'}\n`,
-    );
-    ok('.env.lxs written with the dev key');
-  }
+  ok('.env.lxs key preserved and local API endpoint configured');
   if (run('npx', ['lxs', 'build'], { cwd: EXAMPLE }).status !== 0) {
     fail('`lxs build` failed');
-    return;
+    return false;
   }
 
   step('Starting the shop app and its decoys');
   const composeEnv = {
     ...process.env,
+    SHOP_NODE_ENV: 'development',
     // Local demo only: lets the attacker console choose its source IP.
     // The SDK refuses to honour it when NODE_ENV=production.
     DS_DEV_SIM: '1',
@@ -300,18 +321,69 @@ async function sensors(projectId) {
   if (r.status !== 0) {
     fail('the decoy stack did not start — see the compose output above');
     note('the platform and dashboard are still up — drive the demo with `pnpm demo:simulate`');
-    return;
+    return false;
   }
-  await waitFor('Shop app at http://localhost:3001', () => httpOk('http://localhost:3001'), 90);
+  step('Reloading the agent with the current .env.lxs key');
+  const agentRestart = run(
+    'docker',
+    ['compose', '-f', 'docker-compose.yml', '-f', 'lxs.compose.yml', 'up', '-d', '--force-recreate', 'ds-agent'],
+    { cwd: EXAMPLE, env: composeEnv },
+  );
+  if (agentRestart.status !== 0) {
+    fail('could not restart the agent with the configured ingest key');
+    return false;
+  }
+  const shopReady = await waitFor(
+    'Shop app at http://localhost:3001',
+    () => httpOk('http://localhost:3001/health'),
+    90,
+  );
+  if (!shopReady) return false;
+
+  step('Checking agent registration with the platform');
+  const agentRegistered = await waitFor(
+    'agent authenticated and registered',
+    async () => {
+      const logs = run(
+        'docker',
+        [
+          'compose',
+          '-f',
+          'docker-compose.yml',
+          '-f',
+          'lxs.compose.yml',
+          'logs',
+          '--no-color',
+          '--tail=100',
+          'ds-agent',
+        ],
+        { cwd: EXAMPLE, quiet: true },
+      );
+      return logs.status === 0 && /"msg":"registered"/.test(logs.stdout ?? '');
+    },
+    45,
+  );
+  if (!agentRegistered) {
+    fail('the agent did not register; check the ingest key and LXS_ENDPOINT in examples/acme-shop/.env.lxs');
+    return false;
+  }
+
+  if (customKey) {
+    note('the ingest key selects the project; sign in as that project’s owner to view its events');
+    return true;
+  }
 
   step('Thin-slice check: does a decoy hit reach the platform?');
+  const probeStartedAt = new Date().toISOString();
   await fetch('http://localhost:3001/.env').catch(() => {});
   const landed = await waitFor(
     'decoy event stored',
     async () => {
-      const res = await fetch(`${API}/v1/projects/${projectId}/events?limit=10`, auth).catch(
-        () => null,
-      );
+      const since = encodeURIComponent(probeStartedAt);
+      const res = await fetch(
+        `${API}/v1/projects/${projectId}/events?since=${since}&limit=20`,
+        auth,
+      ).catch(() => null);
       if (!res?.ok) return false;
       const body = await res.json();
       return (body.items ?? []).some((e) => e.is_decoy);
@@ -319,8 +391,10 @@ async function sensors(projectId) {
     45,
   );
   if (!landed) {
-    warn('no decoy event arrived — check `docker compose logs ds-agent` in examples/acme-shop');
+    fail('no decoy event reached the local project — check the agent endpoint/key and `docker compose logs ds-agent`');
+    return false;
   }
+  return true;
 }
 
 // ------------------------------------------------------------ attacker
@@ -342,8 +416,9 @@ async function attacker() {
       ATTACK_MODE: 'live',
       TARGET_APP_URL: 'http://localhost:3001',
       TARGET_SSH_HOST: 'localhost',
-      TARGET_SSH_PORT: '22',
+      TARGET_SSH_PORT: '2222',
       ALLOW_TARGETS: 'localhost,127.0.0.1',
+      ATTACKER_API_TOKEN: ATTACKER_TOKEN,
       PLATFORM_URL: API,
       PLATFORM_KEY: DEV_KEY,
     });
@@ -356,7 +431,8 @@ async function attacker() {
 
   if (!(await httpOk('http://localhost:3002'))) {
     detach('attacker-web', npm, ['run', 'dev'], web, {
-      NEXT_PUBLIC_ATTACKER_API_URL: 'http://localhost:6060',
+      ATTACKER_API_URL: 'http://127.0.0.1:6060',
+      ATTACKER_API_TOKEN: ATTACKER_TOKEN,
     });
   }
   await waitFor(
@@ -364,6 +440,17 @@ async function attacker() {
     () => httpOk('http://localhost:3002'),
     120,
   );
+
+  const control = await fetch('http://localhost:3002/api/attacker/http', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }).catch(() => null);
+  if (control?.status !== 400) {
+    fail('attacker console could not authenticate to attacker-api through its server-side proxy');
+    process.exit(1);
+  }
+  ok('attacker console control channel authenticated');
 }
 
 // -------------------------------------------------------------- status
@@ -417,14 +504,14 @@ function down() {
   );
 }
 
-function banner(projectId) {
+function banner(projectId, customKey = false) {
   console.log(`
 ${C.b}Everything is up.${C.r}
 
   SOC dashboard       ${C.b}http://localhost:3000${C.r}
   Attacker console    ${C.b}http://localhost:3002${C.r}
   Shop (the real app) http://localhost:3001
-  Platform API        ${API}   ·  project ${projectId}
+  Platform API        ${API}   ·  ${customKey ? 'project selected by ingest key' : `project ${projectId}`}
 
 ${C.b}The three-beat demo${C.r}  (docs/DEMO-SCRIPT.md has the words)
   1. Attacker console -> Run ${C.b}noise${C.r}         dashboard labels it Noise, suppressed, nobody paged

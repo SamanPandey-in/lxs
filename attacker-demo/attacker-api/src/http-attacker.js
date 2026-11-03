@@ -25,7 +25,15 @@ function looksLikeDecoy(headers, bodyText) {
  * @param {{method?: string, path: string, headers?: object, body?: string, simIp?: string}} opts
  */
 export async function sendHttp({ method = 'GET', path = '/', headers = {}, body, simIp }) {
-  const guard = checkAllowed(TARGET_APP_URL);
+  let url;
+  try {
+    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw new Error('path_must_be_root_relative');
+    url = new URL(path, TARGET_APP_URL);
+    if (url.origin !== new URL(TARGET_APP_URL).origin) throw new Error('path_must_be_root_relative');
+  } catch (err) {
+    return { status: 0, blocked: false, isDecoy: false, body: '', note: `refused: ${err.message}`, error: err.message };
+  }
+  const guard = checkAllowed(url.hostname);
   if (!guard.ok) {
     return {
       status: 0,
@@ -37,7 +45,6 @@ export async function sendHttp({ method = 'GET', path = '/', headers = {}, body,
     };
   }
 
-  const url = new URL(path, TARGET_APP_URL);
   const reqHeaders = {
     'user-agent': headers['User-Agent'] || headers['user-agent'] || 'LXS-AttackerDemo/1.0',
     ...headers,

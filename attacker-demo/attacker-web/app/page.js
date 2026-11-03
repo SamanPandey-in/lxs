@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const API = process.env.NEXT_PUBLIC_ATTACKER_API_URL || 'http://localhost:6060';
+const API = '/api/attacker';
 
 // Inline theme object, Genesis-demo-client style (attackerFRONTEND.md §2).
 const C = {
@@ -71,7 +71,7 @@ export default function Page() {
     let alive = true;
     async function poll() {
       try {
-        const r = await fetch(`${API}/health`);
+        const r = await fetch(`${API}/health`, { cache: 'no-store' });
         const j = await r.json();
         if (!alive) return;
         setHealth(j);

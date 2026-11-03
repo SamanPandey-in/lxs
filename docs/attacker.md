@@ -185,7 +185,7 @@ A tiny Express (v5, ESM, to match the Genesis stack) service. One job: take a sc
 - **In safe mode**, `/run` ignores the real targets and instead `POST`s the scenario id to `PLATFORM_URL/v1/projects/:pid/demo/replay`, then streams synthetic step results derived from the scenario definition so the console UI still animates.
 - Human pacing: between steps with `persona: "human"`, sleep a seeded 1.5–4s; for `noise`/`opportunistic`, 50–300ms.
 
-**No persistence, no auth.** State is in-memory (open SSH sessions, last run). It resets on restart, which is fine — it is a stage prop.
+**No persistence.** State is in-memory (open SSH sessions, last run) and resets on restart. Mutating routes require `ATTACKER_API_TOKEN`; attacker-web proxies requests server-side so the control token is not exposed in browser JavaScript.
 
 ---
 
@@ -276,12 +276,12 @@ Run (dev):
 ```bash
 # terminal 1 — attacker-api
 cd attacker-demo/attacker-api
-ATTACK_MODE=live TARGET_APP_URL=http://localhost:3000 TARGET_SSH_HOST=localhost TARGET_SSH_PORT=22 \
-ALLOW_TARGETS=localhost npm start          # listens on :6060
+ATTACK_MODE=live TARGET_APP_URL=http://localhost:3001 TARGET_SSH_HOST=localhost TARGET_SSH_PORT=2222 \
+ALLOW_TARGETS=localhost ATTACKER_API_TOKEN=choose-a-long-random-value npm start   # :6060
 
 # terminal 2 — attacker-web
 cd attacker-demo/attacker-web
-NEXT_PUBLIC_ATTACKER_API_URL=http://localhost:6060 npm run dev   # :3002
+ATTACKER_API_URL=http://127.0.0.1:6060 ATTACKER_API_TOKEN=choose-a-long-random-value npm run dev   # :3002
 ```
 
 Ports: attacker-web `3002` (so it doesn't clash with the dashboard on `3000`), attacker-api `6060`.

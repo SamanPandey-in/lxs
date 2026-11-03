@@ -17,6 +17,7 @@
     "typecheck": "turbo run typecheck",
     "db:migrate": "pnpm --filter @lxs/api db:migrate",
     "db:seed": "pnpm --filter @lxs/api db:seed",
+    "seed:saman": "node docs/seed-saman.mjs",
     "platform:up": "docker compose -f infra/platform/docker-compose.platform.yml up -d postgres",
     "platform:all": "docker compose -f infra/platform/docker-compose.platform.yml up -d",
     "platform:down": "docker compose -f infra/platform/docker-compose.platform.yml down",

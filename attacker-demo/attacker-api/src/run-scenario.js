@@ -25,8 +25,13 @@ function seededRandom(seed) {
   };
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(done, ms);
+    function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }
 
 function simIpFor(scenario) {
@@ -47,7 +52,7 @@ function labelFor(step) {
  * Runs `scenario` and calls `emit(frame)` for each step frame plus a final
  * `{type:'done', ...}` frame. `mode` is 'live' or 'safe'.
  */
-export async function runScenario(scenario, { mode, emit }) {
+export async function runScenario(scenario, { mode, emit, signal }) {
   const start = Date.now();
   const rand = seededRandom(scenario.seed || 1);
   const simIp = simIpFor(scenario);
@@ -59,12 +64,13 @@ export async function runScenario(scenario, { mode, emit }) {
     await triggerReplay(scenario.id);
     for (const frame of synthesizeSteps(scenario)) {
       const [lo, hi] = pacingRangeMs(scenario.persona);
-      await sleep(lo + rand() * (hi - lo));
+      await sleep(lo + rand() * (hi - lo), signal);
+      if (signal?.aborted) break;
       if (frame.blocked) blockedCount += 1;
       emit({ ...frame, atMs: Date.now() - start });
       index += 1;
     }
-    emit({ type: 'done', steps: index, blockedCount, mode: 'safe' });
+    emit({ type: 'done', steps: index, blockedCount, mode: 'safe', ...(signal?.aborted ? { aborted: true } : {}) });
     return;
   }
 
@@ -72,7 +78,9 @@ export async function runScenario(scenario, { mode, emit }) {
     const repeat = step.repeat || 1;
     for (let i = 0; i < repeat; i += 1) {
       const [lo, hi] = pacingRangeMs(scenario.persona);
-      if (index > 0) await sleep(lo + rand() * (hi - lo));
+      if (signal?.aborted) break;
+      if (index > 0) await sleep(lo + rand() * (hi - lo), signal);
+      if (signal?.aborted) break;
 
       let frame;
       try {
@@ -172,5 +180,5 @@ export async function runScenario(scenario, { mode, emit }) {
   }
 
   if (sessionId) closeSession(sessionId);
-  emit({ type: 'done', steps: index, blockedCount, mode: 'live' });
+  emit({ type: 'done', steps: index, blockedCount, mode: 'live', ...(signal?.aborted ? { aborted: true } : {}) });
 }

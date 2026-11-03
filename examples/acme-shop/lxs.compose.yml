@@ -57,7 +57,7 @@ services:
     <<: *ds-hardened
     image: ${LXS_COWRIE_IMAGE:-ghcr.io/lxs/cowrie-personas:0.1.0}
     networks: [ds_trap]
-    ports: ["22:2222"]                      # move the host's real sshd to another port first
+    ports: ["2222:2222"]                      # host port configured in decoy.config.ts
     mem_limit: 256m
     cpus: 0.5
     pids_limit: 128

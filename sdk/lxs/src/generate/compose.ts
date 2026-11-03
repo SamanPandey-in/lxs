@@ -103,7 +103,7 @@ export function renderCompose(cfg: ResolvedConfig): string {
       '    <<: *ds-hardened',
       `    image: \${LXS_COWRIE_IMAGE:-ghcr.io/lxs/cowrie-personas:${IMAGE_TAG}}`,
       '    networks: [ds_trap]',
-      `    ports: ["${s.port}:2222"]                      # move the host's real sshd to another port first`,
+      `    ports: ["${s.port}:2222"]                      # host port configured in decoy.config.ts`,
       '    mem_limit: 256m',
       '    cpus: 0.5',
       '    pids_limit: 128',

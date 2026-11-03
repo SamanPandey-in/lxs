@@ -17,8 +17,8 @@ t.create('web-admin', '/admin', {
 t.create('web-bait', '/.env'); // template inferred from the path
 t.create('web-bait', '/backup.sql');
 
-// Network decoy: the second argument is a host port. Move the host's real sshd to another port first.
-t.create('ssh', 22, {
+// Network decoy: use a high host port so the local demo does not require binding privileged port 22.
+t.create('ssh', 2222, {
   persona: 'db-backup',
   hostname: 'db-backup-01',
   credentials: 'weak-defaults',

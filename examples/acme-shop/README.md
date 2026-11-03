@@ -1,5 +1,7 @@
 # acme-shop: the demo customer app
 
+To send this app's honeypot events to the project whose key is configured in `.env.lxs`, follow [the ingest key and project ownership flow](../../docs/ingest-key-project-flow.md).
+
 A small Express shop protected by LXS. It has one real, sensitive route (`/api/payments`, declared as a
 critical asset) and the full demo decoy set:
 
@@ -8,7 +10,7 @@ critical asset) and the full demo decoy set:
 | `web-admin` | `/admin` | fake "Acme Shop" admin login; `admin`/`admin` opens a fake customer panel with an "Export customers" link |
 | `web-bait` | `/.env` | fake secrets file; leaks `SSH_HOST=db-backup-01`, a deploy password and a fake `acme_live_...` API key |
 | `web-bait` | `/backup.sql` | fake `pg_dump` with canary customer rows |
-| `ssh` | host port 22 | Cowrie persona `db-backup-01`, accepts `admin`/`admin`, holds the planted API key and a canary export |
+| `ssh` | host port 2222 | Cowrie persona `db-backup-01`, accepts `admin`/`admin`, holds the planted API key and a canary export |
 
 The planted `acme_live_...` key is a honeytoken: if anyone sends it to the real app, the middleware reports the use by
 token id (only a sha256 hash of the key ever leaves the machine).
@@ -67,7 +69,7 @@ the SDK refuses to start with that flag when `NODE_ENV=production`.
 
 ## Notes
 
-* Move the host's real `sshd` off port 22 before starting the SSH decoy (or change the port in `decoy.config.ts`).
+* Change the host port in `decoy.config.ts` if 2222 is already in use.
 * Images are tagged `0.1.0`. Build them from the repo root with `images/*.Dockerfile` and export
   `LXS_AGENT_IMAGE`, `LXS_WEB_IMAGE`, `LXS_COWRIE_IMAGE` to use local tags or pinned digests.
 * On Docker Desktop (macOS/Windows) the host firewall rules from `infra/victim/ds-firewall.sh` cannot be applied, so

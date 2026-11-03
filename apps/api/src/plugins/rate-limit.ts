@@ -26,11 +26,13 @@ export default fp(async function rateLimitPlugin(app: FastifyInstance) {
     global: true,
     max: env.API_RATE_PER_MIN,
     timeWindow: '1 minute',
+    // Health probes stay exempt so monitoring cannot be rate-limited out.
+    // /v1/stream used to be exempt too, which left SSE reconnects uncapped on
+    // top of there being no connection ceiling; it is now subject to the normal
+    // per-IP limit, which a dashboard reconnecting with backoff never reaches.
     allowList: (req) => {
       const url = req.url;
-      return (
-        url.startsWith('/healthz') || url.startsWith('/readyz') || url.startsWith('/v1/stream')
-      );
+      return url.startsWith('/healthz') || url.startsWith('/readyz');
     },
     errorResponseBuilder: (_req, ctx) => ({
       statusCode: 429,

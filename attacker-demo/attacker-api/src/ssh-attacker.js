@@ -4,19 +4,26 @@
 // shell. No persistence — fine, this is a stage prop (attacker.md §6).
 
 import { Client } from 'ssh2';
+import { randomUUID } from 'node:crypto';
 import { checkAllowed } from './allowlist.js';
 
 const TARGET_SSH_HOST = process.env.TARGET_SSH_HOST || 'localhost';
 const TARGET_SSH_PORT = Number(process.env.TARGET_SSH_PORT || 22);
 const SIM_IP = process.env.SIM_IP || '';
+const SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 
 /** sessionId -> { client, connected } */
 const sessions = new Map();
 
-let counter = 0;
 function newSessionId() {
-  counter += 1;
-  return `s_${Date.now().toString(36)}${counter.toString(36)}`;
+  return `s_${randomUUID()}`;
+}
+
+function expireSession(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  session.timer = setTimeout(() => closeSession(sessionId), SESSION_IDLE_TIMEOUT_MS);
+  session.timer.unref?.();
 }
 
 function isRefusalError(err) {
@@ -90,8 +97,11 @@ export async function sshAction({ action, username, password, cmd, sessionId, si
         password: password || '',
         simIp,
       });
-      const id = sessionId || newSessionId();
-      sessions.set(id, { client, connected: true, username });
+      // Never let callers choose or overwrite a live session identifier.
+      const id = newSessionId();
+      sessions.set(id, { client, connected: true, username, timer: null });
+      expireSession(id);
+      client.once('close', () => closeSession(id));
       return {
         ok: true,
         refused: false,
@@ -125,6 +135,8 @@ export async function sshAction({ action, username, password, cmd, sessionId, si
         action,
       };
     }
+    clearTimeout(session.timer);
+    expireSession(sessionId);
     try {
       const output = await execOnce(session.client, cmd || 'echo');
       return { ok: true, refused: false, sessionId, output, action };
@@ -153,6 +165,7 @@ export async function sshAction({ action, username, password, cmd, sessionId, si
 export function closeSession(sessionId) {
   const session = sessions.get(sessionId);
   if (session) {
+    clearTimeout(session.timer);
     try {
       session.client.end();
     } catch {

@@ -174,6 +174,21 @@ interface Indicator {
   context: string;
 }
 
+/**
+ * Human-readable context for an attacker indicator. `label` is NOT NULL in the
+ * schema but is not constrained to be non-empty, and the worker writes
+ * `verdict.label` straight through — an empty one used to throw here and 500 the
+ * whole export, so it degrades to "Unlabelled" instead.
+ */
+export function attackerContext(a: {
+  label: string;
+  real_asset_reached: boolean;
+  number: number;
+}): string {
+  const label = a.label ? `${a.label[0]!.toUpperCase()}${a.label.slice(1)}` : 'Unlabelled';
+  return `${label}${a.real_asset_reached ? '; reached a real asset' : ''} (incident #${a.number})`;
+}
+
 export async function buildIocs(
   projectId: string,
   incidentId?: string,
@@ -218,7 +233,7 @@ export async function buildIocs(
     value: a.ip,
     first_seen: a.first_seen,
     last_seen: a.last_seen,
-    context: `${a.label[0]!.toUpperCase()}${a.label.slice(1)}${a.real_asset_reached ? '; reached a real asset' : ''} (incident #${a.number})`,
+    context: attackerContext(a),
   }));
   const seen = new Set<string>();
   const add = (i: Indicator) => {

@@ -15,6 +15,22 @@ import { ingestRateLimit } from '../plugins/rate-limit.js';
 
 const gunzipAsync = promisify(gunzip);
 
+/**
+ * Ceilings for compressed ingest bodies.
+ *
+ * gzip runs around 675:1 on repetitive JSON, so what a request costs is the
+ * decompressed size, not the body limit: at the old 8x the default 2 MB body
+ * could expand to 16 MB, with nothing bounding how many did so at once. 4x is
+ * still far more than a legitimate batch needs — the envelope caps a batch at
+ * 500 events and DecoyEvent caps each field — and the gate bounds how much
+ * decompression can be in flight at any moment.
+ *
+ * `gunzipGate` is exported so the limit can be exercised in tests without
+ * racing real requests against each other.
+ */
+const MAX_DECOMPRESSED_RATIO = 4;
+export const gunzipGate = { inFlight: 0, max: 4 };
+
 const Envelope = z.object({
   sensor_id: z.string().max(128).optional(),
   sent_at: z.string().optional(),
@@ -176,10 +192,33 @@ export function registerJsonParser(app: FastifyInstance): void {
       let buf = body;
       const enc = req.headers['content-encoding'];
       if (enc === 'gzip') {
+        const maxOutputLength = env.MAX_BODY_BYTES * MAX_DECOMPRESSED_RATIO;
+        // 429, not 503: shedding load is a throttle, not a failure. The agent
+        // treats both the same (keep the batch, back off with jitter — ship.ts),
+        // but the error handler logs >= 500 at error level with a stack, so a
+        // burst of 503s floods the API log with alarming traces mid-demo.
+        if (gunzipGate.inFlight >= gunzipGate.max)
+          throw new HttpError(
+            429,
+            'too_many_inflight',
+            'Too many compressed batches in flight; keep buffering and retry',
+          );
+        gunzipGate.inFlight += 1;
         try {
-          buf = await gunzipAsync(body, { maxOutputLength: env.MAX_BODY_BYTES * 8 });
-        } catch {
+          buf = await gunzipAsync(body, { maxOutputLength });
+        } catch (err) {
+          // A body that expands past the ceiling is a size problem, not a
+          // malformed one; reporting it as "Invalid gzip body" sent agents
+          // looking for a corruption bug that was not there.
+          if ((err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE')
+            throw new HttpError(
+              413,
+              'payload_too_large',
+              `Decompressed body exceeds ${maxOutputLength} bytes; send smaller batches`,
+            );
           throw new HttpError(400, 'bad_encoding', 'Invalid gzip body');
+        } finally {
+          gunzipGate.inFlight -= 1;
         }
       }
       if (buf.length === 0) return {};

@@ -15,23 +15,63 @@ import { isUuid, projectAccess, requireSession, userOrgs } from '../plugins/auth
 import { evictKeyCache } from '../plugins/bearer-key.js';
 import { slugify } from './auth.js';
 
-const toCidr = (v: string): string => {
-  const [addr, mask] = v.trim().split('/');
-  const fam = isIP(addr ?? '');
-  if (!fam) throw new Error('bad ip');
-  return mask === undefined ? `${addr}/${fam === 4 ? 32 : 128}` : `${addr}/${mask}`;
-};
+/**
+ * Normalise one allowlist entry to a literal the `cidr[]` column will accept.
+ *
+ * The address was always checked, the prefix length never was, so "10.0.0.0/999"
+ * and "10.0.0.0/abc" passed validation and then failed in Postgres as a generic
+ * 422 that named neither the field nor the entry. Every rejection here carries a
+ * message saying what is wrong with which value.
+ *
+ * `cidr` also refuses host bits to the right of the mask, so an IPv4 entry like
+ * "192.168.1.5/24" is masked down to its network address — that is the network
+ * the entry denotes, and the normalised value is returned to the caller in the
+ * project JSON, so nothing is hidden. The equivalent IPv6 normalisation needs a
+ * full address expansion and is deliberately not hand-rolled here; an IPv6 entry
+ * carrying host bits is still caught, by Postgres, as it was before.
+ */
+export function toCidr(v: string): string {
+  const trimmed = v.trim();
+  if (!trimmed) throw new Error('entry is empty');
+  const slash = trimmed.indexOf('/');
+  const addr = slash < 0 ? trimmed : trimmed.slice(0, slash);
+  const suffix = slash < 0 ? null : trimmed.slice(slash + 1);
+  const fam = isIP(addr);
+  if (!fam) throw new Error(`"${trimmed}" is not an IPv4 or IPv6 address`);
+  const maxBits = fam === 4 ? 32 : 128;
+  if (suffix === null) return `${addr}/${maxBits}`;
+  if (!/^\d{1,3}$/.test(suffix))
+    throw new Error(
+      `"${trimmed}" has prefix length "${suffix}"; expected a number from 0 to ${maxBits}`,
+    );
+  const bits = Number(suffix);
+  if (bits > maxBits)
+    throw new Error(`"${trimmed}" has prefix length ${bits}; IPv${fam} allows at most ${maxBits}`);
+  if (fam === 6) return `${addr}/${bits}`;
+  // IPv4: zero the host bits so the value is a valid `cidr` network.
+  const octets = addr.split('.').map(Number);
+  const asInt = ((octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!) >>> 0;
+  const network = bits === 0 ? 0 : (asInt & (0xffffffff << (32 - bits))) >>> 0;
+  const masked = [network >>> 24, (network >>> 16) & 255, (network >>> 8) & 255, network & 255];
+  return `${masked.join('.')}/${bits}`;
+}
 
 const CidrList = z
   .array(z.string().max(64))
   .max(200)
   .transform((arr, ctx) => {
-    try {
-      return arr.map(toCidr);
-    } catch {
-      ctx.addIssue({ code: 'custom', message: 'allowlist entries must be IPs or CIDRs' });
-      return z.NEVER;
-    }
+    const out: string[] = [];
+    let failed = false;
+    arr.forEach((entry, i) => {
+      try {
+        out.push(toCidr(entry));
+      } catch (err) {
+        failed = true;
+        // path: [i] so the client is told which entry to fix, not just that one is wrong.
+        ctx.addIssue({ code: 'custom', message: (err as Error).message, path: [i] });
+      }
+    });
+    return failed ? z.NEVER : out;
   });
 
 const CreateProject = z.object({

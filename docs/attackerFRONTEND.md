@@ -55,7 +55,7 @@ As thin as possible. Match the attacker-api's ecosystem (Node/ESM) so it's one `
 
 - **Next.js (JS) single page**, or even plain **Vite + React** — it is one page, pick whichever is faster to stand up. No router needed.
 - **No component library, no Tailwind, no tokens.** Inline styles or one small CSS file, terminal theme. This is the opposite choice from the dashboard on purpose.
-- One env var: `NEXT_PUBLIC_ATTACKER_API_URL` (default `http://localhost:6060`).
+- The browser calls a same-origin Next.js route at `/api/attacker/*`. The route proxies to `ATTACKER_API_URL` and adds the server-only `ATTACKER_API_TOKEN`; neither value is exposed in the browser bundle.
 - Icons optional; emoji (⚡ ▶ ■ ✓ ✗) are fine for a prop.
 
 **Theme (inline `C` object, like the Genesis demo client):** near-black background (`#0b0d0e`), green/amber terminal text, red for blocked/refused, one accent. Monospace everywhere. Keep it legible on a projector: large-ish font (14–15px), high contrast.
@@ -64,14 +64,14 @@ As thin as possible. Match the attacker-api's ecosystem (Node/ESM) so it's one `
 
 ## 3. The only logic it has
 
-Three fetch patterns against `attacker-api`. That is the entire app.
+Three fetch patterns against the same-origin proxy. The proxy forwards them to `attacker-api`; it adds the control token on the server.
 
 **Run a scenario (streaming):**
 
 ```js
 async function runScenario(id) {
   setRunning(true); setSteps([]);
-  const res = await fetch(`${API}/run`, {
+  const res = await fetch('/api/attacker/run', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ scenarioId: id, mode }),
   });
@@ -99,7 +99,7 @@ async function runScenario(id) {
 
 ```js
 async function sendHttp() {
-  const r = await fetch(`${API}/http`, {
+  const r = await fetch('/api/attacker/http', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ method, path, headers: headerObj, body: reqBody || undefined }),
   });
@@ -112,7 +112,7 @@ async function sendHttp() {
 
 ```js
 async function sshRun(action) {
-  const r = await fetch(`${API}/ssh`, {
+  const r = await fetch('/api/attacker/ssh', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action, username, password, cmd, sessionId }),
   });

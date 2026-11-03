@@ -18,13 +18,13 @@ attacker-demo/
 # terminal 1 — attacker-api
 cd attacker-demo/attacker-api
 npm install
-ATTACK_MODE=live TARGET_APP_URL=http://localhost:3000 TARGET_SSH_HOST=localhost TARGET_SSH_PORT=22 \
-ALLOW_TARGETS=localhost npm start          # listens on :6060
+ATTACK_MODE=live TARGET_APP_URL=http://localhost:3001 TARGET_SSH_HOST=localhost TARGET_SSH_PORT=2222 \
+ALLOW_TARGETS=localhost ATTACKER_API_TOKEN=choose-a-long-random-value npm start
 
 # terminal 2 — attacker-web
 cd attacker-demo/attacker-web
 npm install
-NEXT_PUBLIC_ATTACKER_API_URL=http://localhost:6060 npm run dev   # :3002
+ATTACKER_API_URL=http://127.0.0.1:6060 ATTACKER_API_TOKEN=choose-a-long-random-value npm run dev   # :3002
 ```
 
 Open http://localhost:3002.

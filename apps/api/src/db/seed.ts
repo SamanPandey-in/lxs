@@ -38,6 +38,11 @@ async function main(): Promise<void> {
     .from(projects)
     .where(and(eq(projects.orgId, org!.id), eq(projects.slug, 'acme-shop')))
     .limit(1);
+  // seed:saman may have moved the canonical demo project into Saman's org.
+  // Reuse it on later demo startups instead of creating a second acme-shop.
+  if (!project) {
+    [project] = await db.select().from(projects).where(eq(projects.slug, 'acme-shop')).limit(1);
+  }
   if (!project) {
     [project] = await db
       .insert(projects)

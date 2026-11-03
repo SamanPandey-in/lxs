@@ -2,12 +2,13 @@
 // that performs real attacks against the honeypots (or replays via the
 // platform in safe mode) and streams results back to attacker-web.
 //
-// No persistence, no auth — it's a stage prop. State is in-memory and
-// resets on restart.
+// No persistence. Mutating routes require the demo control token; the web UI
+// keeps that token server-side and reaches this API through its Next.js proxy.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 
 import cors from 'cors';
 import express from 'express';
@@ -21,6 +22,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SCENARIOS_DIR = join(__dirname, '..', 'scenarios');
 
 const PORT = Number(process.env.PORT || 6060);
+const HOST = process.env.HOST || '127.0.0.1';
+const CONTROL_TOKEN = process.env.ATTACKER_API_TOKEN || '';
 const ATTACK_MODE = (process.env.ATTACK_MODE || 'live').toLowerCase(); // live | safe
 const TARGET_APP_URL = process.env.TARGET_APP_URL || 'http://localhost:3000';
 const TARGET_SSH_HOST = process.env.TARGET_SSH_HOST || 'localhost';
@@ -37,10 +40,21 @@ function loadScenarios() {
 }
 
 let scenarios = loadScenarios();
+let activeRun = false;
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: ['http://localhost:3002', 'http://127.0.0.1:3002'] }));
 app.use(express.json({ limit: '1mb' }));
+
+function requireControlToken(req, res, next) {
+  const supplied = req.get('authorization')?.replace(/^Bearer\s+/i, '') || '';
+  const expected = Buffer.from(CONTROL_TOKEN);
+  const actual = Buffer.from(supplied);
+  if (!CONTROL_TOKEN || expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  return next();
+}
 
 app.get('/health', (req, res) => {
   res.json({
@@ -65,7 +79,8 @@ app.get('/scenarios', (req, res) => {
   );
 });
 
-app.post('/run', async (req, res) => {
+app.post('/run', requireControlToken, async (req, res) => {
+  if (activeRun) return res.status(409).json({ error: 'run_already_active' });
   const { scenarioId, mode } = req.body || {};
   const scenario = scenarios.get(scenarioId);
   if (!scenario) {
@@ -75,6 +90,10 @@ app.post('/run', async (req, res) => {
 
   const runMode = mode || ATTACK_MODE;
 
+  activeRun = true;
+  const controller = new AbortController();
+  req.on('aborted', () => controller.abort());
+  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
   res.status(200);
   res.setHeader('content-type', 'application/x-ndjson');
   res.setHeader('cache-control', 'no-cache');
@@ -87,7 +106,7 @@ app.post('/run', async (req, res) => {
   };
 
   try {
-    await runScenario(scenario, { mode: runMode, emit });
+    await runScenario(scenario, { mode: runMode, emit, signal: controller.signal });
   } catch (err) {
     emit({
       type: 'step',
@@ -98,11 +117,12 @@ app.post('/run', async (req, res) => {
     });
     emit({ type: 'done', steps: 0, blockedCount: 0, error: err.message });
   } finally {
-    res.end();
+    activeRun = false;
+    if (!res.destroyed) res.end();
   }
 });
 
-app.post('/http', async (req, res) => {
+app.post('/http', requireControlToken, async (req, res) => {
   const guard = checkAllowed(TARGET_APP_URL);
   if (!guard.ok) {
     res.status(400).json({ error: 'target_not_allowed', ...guard });
@@ -117,7 +137,7 @@ app.post('/http', async (req, res) => {
   res.json(result);
 });
 
-app.post('/ssh', async (req, res) => {
+app.post('/ssh', requireControlToken, async (req, res) => {
   const guard = checkAllowed(TARGET_SSH_HOST);
   if (!guard.ok) {
     res.status(400).json({ error: 'target_not_allowed', ...guard });
@@ -132,7 +152,7 @@ app.post('/ssh', async (req, res) => {
   res.json(result);
 });
 
-app.post('/reset', (req, res) => {
+app.post('/reset', requireControlToken, (req, res) => {
   resetAllSessions();
   scenarios = loadScenarios();
   res.json({ ok: true });
@@ -144,9 +164,9 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'internal_error', message: err.message });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
-  console.log(`attacker-api listening on :${PORT} (mode=${ATTACK_MODE})`);
+  console.log(`attacker-api listening on ${HOST}:${PORT} (mode=${ATTACK_MODE})`);
   // eslint-disable-next-line no-console
   console.log(
     `targets: app=${TARGET_APP_URL} ssh=${TARGET_SSH_HOST}:${TARGET_SSH_PORT} allow=${getAllowTargets().join(',')}`,
