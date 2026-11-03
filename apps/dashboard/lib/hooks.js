@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { isDemo, subscribeDemo } from "./core";
+import { getApiProblem, isDemo, subscribeApiProblem, subscribeDemo } from "./core";
 import { useStore } from "./store";
 
 /** One-shot async load. Returns { data, error, loading, reload }. */
@@ -86,6 +86,11 @@ export function useNow(ms = 5000) {
 
 export function useDemo() {
   return useSyncExternalStore(subscribeDemo, isDemo, () => false);
+}
+
+/** The worst current API failure ({ kind, message }), or null. */
+export function useApiProblem() {
+  return useSyncExternalStore(subscribeApiProblem, getApiProblem, () => null);
 }
 
 export function useCopy() {

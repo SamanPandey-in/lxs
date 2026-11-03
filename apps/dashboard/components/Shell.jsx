@@ -1,5 +1,5 @@
 "use client";
-import { ChevronRight, FlaskConical, Moon, Sun } from "lucide-react";
+import { ChevronRight, CircleAlert, FlaskConical, Moon, Sun } from "lucide-react";
 // App shell copied from the Genesis api-client and re-branded: healr -> LXS.
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -7,8 +7,8 @@ import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
-import { coreUrl } from "../lib/core";
-import { useDemo } from "../lib/hooks";
+import { api, coreUrl, resolveProject, setActiveProject } from "../lib/core";
+import { useApiProblem, useDemo } from "../lib/hooks";
 import { NAV } from "../lib/nav";
 import { useStore } from "../lib/store";
 import { Pill } from "./ui";
@@ -25,13 +25,96 @@ function Connection({ conn }) {
   return <Pill tone={tone}>{label}</Pill>;
 }
 
+const PROBLEM_TITLE = {
+  session: "Not signed in: the API rejected this session",
+  forbidden: "Permission denied: this account's role cannot see part of this page",
+  network: "Platform API unreachable",
+  timeout: "Platform API is not responding in time",
+  server: "Platform API is returning errors",
+};
+
+/** Failures are never quiet. Nothing here can be dismissed; it clears when the cause does. */
+function StatusBanner({ demo, problem }) {
+  if (demo)
+    return (
+      <div className="api-alert" role="alert">
+        <FlaskConical size={15} aria-hidden />
+        <span>
+          <strong>MOCK DATA: nothing on this screen is real.</strong> The API at {coreUrl()} is
+          unavailable and LXS_ALLOW_MOCK=1 is set. Actions still go to the real API and will fail.
+        </span>
+      </div>
+    );
+  if (!problem) return null;
+  return (
+    <div className="api-alert" role="alert">
+      <CircleAlert size={15} aria-hidden />
+      <span>
+        <strong>{PROBLEM_TITLE[problem.kind]}.</strong> {problem.message}. Anything on screen is
+        from the last successful refresh.
+      </span>
+    </div>
+  );
+}
+
 export default function Shell({ children }) {
   const path = usePathname();
+  const isPublic = path === "/" || path === "/login" || path === "/signup";
+  const [authState, setAuthState] = useState("checking");
+  useEffect(() => {
+    if (isPublic) return;
+    let active = true;
+    fetch(`${coreUrl()}/v1/me`, { credentials: "include", cache: "no-store" })
+      .then((response) => {
+        if (!active) return;
+        if (response.ok) setAuthState("authenticated");
+        else if (response.status === 401 || response.status === 403) {
+          window.location.replace(`/login?next=${encodeURIComponent(path)}`);
+        } else setAuthState("error");
+      })
+      .catch(() => active && setAuthState("error"));
+    return () => {
+      active = false;
+    };
+  }, [path, isPublic]);
+
+  if (isPublic) return children;
+  if (authState !== "authenticated") {
+    return (
+      <main className="auth-screen">
+        <p>
+          {authState === "error"
+            ? "Could not verify your session. Check that the API is available and reload."
+            : "Checking your session…"}
+        </p>
+      </main>
+    );
+  }
+  return <WorkspaceShell path={path}>{children}</WorkspaceShell>;
+}
+
+function WorkspaceShell({ children, path }) {
   const st = useStore();
   const demo = useDemo();
+  const problem = useApiProblem();
   const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState("");
   useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    let active = true;
+    Promise.all([api.projects(), resolveProject()])
+      .then(([items, selected]) => {
+        if (!active) return;
+        setProjects(items);
+        setProjectId(selected);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
   const dark = mounted && resolvedTheme === "dark";
 
   const active = (href) =>
@@ -97,6 +180,26 @@ export default function Shell({ children }) {
             )}
           </span>
           <span className="grow" />
+          {projects.length > 1 ? (
+            <label className="project-select-label">
+              <span className="sr-only">Active project</span>
+              <select
+                className="project-select"
+                aria-label="Active project"
+                value={projectId}
+                onChange={(event) => {
+                  setActiveProject(event.target.value);
+                  window.location.reload();
+                }}
+              >
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           {st.overview ? (
             <span className="sev-summary" role="group" aria-label="Severity summary">
               <span>
@@ -113,12 +216,28 @@ export default function Shell({ children }) {
           {demo ? (
             <span
               className="demo-badge"
-              title={`Platform API unreachable at ${coreUrl()}. Showing built-in demo data.`}
+              title={`Platform API unavailable at ${coreUrl()}. Showing built-in mock data.`}
             >
-              <FlaskConical size={12} aria-hidden /> Demo data
+              <FlaskConical size={12} aria-hidden /> Mock data
             </span>
           ) : null}
           <Connection conn={st.conn} />
+          <button
+            className="btn btn-sm"
+            type="button"
+            onClick={async () => {
+              try {
+                await fetch(`${coreUrl()}/v1/auth/logout`, {
+                  method: "POST",
+                  credentials: "include",
+                });
+              } finally {
+                window.location.replace("/");
+              }
+            }}
+          >
+            Log out
+          </button>
           <Button
             variant="ghost"
             size="icon-sm"
@@ -129,6 +248,7 @@ export default function Shell({ children }) {
             {dark ? <Sun /> : <Moon />}
           </Button>
         </div>
+        <StatusBanner demo={demo} problem={problem} />
         <main className="page">{children}</main>
       </div>
       <Toaster position="bottom-right" richColors />

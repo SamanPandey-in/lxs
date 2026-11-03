@@ -213,8 +213,10 @@ export function ErrorState({ error, onRetry, what = "data" }) {
         )
       }
     >
-      {error?.message ?? "Unknown error"}. Check that the LXS platform is running at the URL in
-      Settings.
+      {error?.message ?? "Unknown error"}.
+      {error?.status === 401 || error?.status === 403
+        ? " The API answered, but refused this session."
+        : " Check that the LXS platform is running."}
     </EmptyState>
   );
 }

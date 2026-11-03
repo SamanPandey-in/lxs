@@ -33,7 +33,7 @@ export default function AttackerPage() {
   const [unblockOpen, setUnblockOpen] = useState(false);
   const { data, error, loading, reload } = usePolling(
     async () => {
-      const [a, bl] = await Promise.all([api.attacker(id), api.blocklist(PROJECT).catch(() => [])]);
+      const [a, bl] = await Promise.all([api.attacker(id), api.blocklist(PROJECT)]);
       return { a, bl };
     },
     5000,

@@ -52,6 +52,13 @@ function load(): Env {
     console.error('SESSION_SECRET must be set in production');
     process.exit(1);
   }
+  if (
+    env.DEV_AUTH_BYPASS &&
+    (env.NODE_ENV !== 'development' || !['127.0.0.1', '::1', 'localhost'].includes(env.HOST))
+  ) {
+    console.error('DEV_AUTH_BYPASS is allowed only in development when HOST is loopback');
+    process.exit(1);
+  }
   return env;
 }
 

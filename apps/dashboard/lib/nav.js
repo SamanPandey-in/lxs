@@ -16,7 +16,7 @@ export const NAV = [
   {
     group: "Monitor",
     items: [
-      { href: "/", label: "Overview", icon: LayoutDashboard },
+      { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
       { href: "/feed", label: "Live feed", icon: Radio },
       { href: "/incidents", label: "Incidents", icon: ShieldAlert },
       { href: "/attackers", label: "Attackers", icon: Users },

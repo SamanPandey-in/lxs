@@ -2,7 +2,15 @@
 import { CheckCheck, ShieldAlert, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
-import { Chip, EmptyState, PageHeader, TableSkeleton, Tabs, techTitle } from "@/components/ui";
+import {
+  Chip,
+  EmptyState,
+  ErrorState,
+  PageHeader,
+  TableSkeleton,
+  Tabs,
+  techTitle,
+} from "@/components/ui";
 import { IncidentsTable, SectionCard } from "@/components/workspace";
 import { api } from "@/lib/core";
 import { sortBySeverity, storeActions, useStore } from "@/lib/store";
@@ -112,6 +120,8 @@ function Queue() {
         />
         {!st.bootstrapped ? (
           <TableSkeleton />
+        ) : !st.loaded && st.error ? (
+          <ErrorState error={st.error} onRetry={storeActions.refresh} what="incidents" />
         ) : rows.length === 0 ? (
           <EmptyState icon={ShieldAlert} title={empties[tab][0]}>
             {empties[tab][1]}

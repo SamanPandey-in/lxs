@@ -24,6 +24,8 @@ const EXAMPLE = join(ROOT, 'examples/acme-shop');
 const PLATFORM_COMPOSE = join(ROOT, 'infra/platform/docker-compose.platform.yml');
 const API = process.env.API_URL ?? 'http://localhost:8080';
 const DEV_KEY = 'ds_dev_0000000000000000000000000000000000000000';
+const DEMO_EMAIL = process.env.LXS_DEMO_EMAIL ?? 'demo@lxs.dev';
+const DEMO_PASSWORD = process.env.LXS_DEMO_PASSWORD ?? 'demo1234';
 const WIN = process.platform === 'win32';
 const npm = WIN ? 'npm.cmd' : 'npm';
 const pnpm = WIN ? 'pnpm.cmd' : 'pnpm';
@@ -83,7 +85,7 @@ const httpOk = (url, init) =>
     .then((r) => r.ok)
     .catch(() => false);
 
-const auth = { headers: { authorization: `Bearer ${DEV_KEY}` } };
+let auth = { headers: {} };
 
 const dockerUp = () => run('docker', ['info'], { quiet: true }).status === 0;
 
@@ -107,9 +109,33 @@ function hostPortBound() {
 }
 
 async function resolveProject() {
+  const login = await fetch(`${API}/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: DEMO_EMAIL, password: DEMO_PASSWORD }),
+  }).catch(() => null);
+  if (!login?.ok) {
+    const detail = login ? `HTTP ${login.status}` : 'API connection failed';
+    fail(`could not log in as ${DEMO_EMAIL} (${detail})`);
+    return null;
+  }
+  const cookies = login.headers.getSetCookie?.() ?? [login.headers.get('set-cookie') ?? ''];
+  const session = cookies
+    .map((cookie) => cookie.split(';', 1)[0])
+    .find((cookie) => cookie.startsWith('ds_session='));
+  if (!session) {
+    fail('API login succeeded but did not return a session cookie');
+    return null;
+  }
+  auth = { headers: { cookie: session } };
   if (process.env.LXS_PROJECT_ID) return process.env.LXS_PROJECT_ID;
   const r = await fetch(`${API}/v1/projects`, auth).catch(() => null);
-  if (!r?.ok) return null;
+  if (!r?.ok) {
+    fail(
+      `could not list projects for ${DEMO_EMAIL} (${r ? `HTTP ${r.status}` : 'API connection failed'})`,
+    );
+    return null;
+  }
   const body = await r.json();
   const list = body.items ?? body.projects ?? [];
   return (list.find((p) => p.slug === 'acme-shop') ?? list[0])?.id ?? null;

@@ -15,9 +15,11 @@ detection → one correlated incident → dashboard → one-click block → agen
 documented scores reproduce exactly. 109 tests pass, typecheck is clean across 13
 packages, lint passes, and the dashboard builds and serves from production.
 
-**Two things are genuinely not built:** the LLM narrator (Phase 8) and real auth
-(Phase 3b is a minimal users table, not Better Auth). **One thing cannot be proven on
-this machine:** containment, because the host firewall rules are Linux-only.
+**The LLM narrator remains unbuilt** (Phase 8). Prototype authentication is now implemented
+for Phase 3b: email/password signup and login, JWT-backed HttpOnly sessions, projects and
+project-scoped ingest keys. Email verification is intentionally omitted for the prototype.
+**One thing cannot be proven on this machine:** containment, because the host firewall rules
+are Linux-only.
 
 ---
 
@@ -29,7 +31,7 @@ this machine:** containment, because the host firewall rules are Linux-only.
 | **1** | Repo and development foundations | **Done** |
 | **2** | Core backend, database, ingest | **Done** |
 | **3** | Web decoy + middleware + agent — *the thin slice* | **Done** |
-| 3b | Auth, projects, keys, onboarding | **Partial** — see gaps |
+| 3b | Prototype auth, projects, keys, onboarding | **Done** — production identity features remain out of scope |
 | **4** | Detection engine, incidents, attackers | **Done**, verified |
 | 4b | SDK CLI generator | **Done** |
 | **5** | SSH honeypot (Cowrie) | **Done** |
@@ -131,10 +133,23 @@ states already exist, so this is the narrator itself plus caching by fingerprint
 playbook says to screen-record Beat 2 the night before. That has not been done, and it
 is the cheapest insurance available.
 
-### 4. Real auth (Phase 3b)
+### 4. Production auth hardening (after prototype Phase 3b)
 
-Currently a minimal users table plus a signed cookie, with `DEV_AUTH_BYPASS=true` in dev.
-Fine for the demo, not for anything else. Better Auth with Postgres sessions is the plan.
+The prototype flow is implemented: username/email + password login, signup without email
+verification, a standard HS256 JWT in an HttpOnly SameSite=Lax cookie, per-user session
+revocation at logout, organization/project bootstrap, and project-scoped API-key creation and
+revocation. `DEV_AUTH_BYPASS` defaults to false and is rejected unless development binds to
+loopback. Cookie-authenticated mutations require an allowed `Origin`; protected reads propagate
+401/403 and resource-level 404s rather than switching to mock data. `/v1/system` counts are
+scoped to projects in organizations the caller owns. Password recovery, email verification, stronger deployment
+secret/session management, and multi-user organization administration remain future work.
+
+Validated on 2026-10-31: API typecheck; three JWT unit tests; dashboard production build; and
+14 live HTTP assertions against local Postgres covering signup, initial and additional project
+creation, project listing, key create/revoke, tenant-scoped system counts, CSRF Origin checks,
+email/username login, invalid password, logout, and rejection of a copied JWT after logout.
+A separate two-account check confirmed owner-level system counts exclude a project where the
+same user has only analyst membership, while that project's owner can see its event count.
 
 ### 5. Notifications (Phase 8)
 

@@ -48,7 +48,7 @@ export default function DecoysPage() {
         purpose="Proof the honeypots cannot hurt you, and a live look at every sensor. Containment is declared in config and verified by a self-test inside each container."
       />
 
-      {c ? (
+      {c?.total > 0 ? (
         <div className="ds-proof" data-tone={pass ? undefined : "bad"}>
           <span className="vb-ico">
             {pass ? <ShieldCheck size={20} /> : <ShieldAlert size={20} />}
@@ -65,6 +65,17 @@ export default function DecoysPage() {
           <button type="button" className="btn" onClick={() => setReport(c.containers[0])}>
             <FileText /> View report
           </button>
+        </div>
+      ) : c ? (
+        <div className="ds-proof">
+          <span className="vb-ico"><ShieldAlert size={20} /></span>
+          <div style={{ flex: 1 }}>
+            <h2>Containment: NOT RUN</h2>
+            <div className="dim">
+              No sensor has submitted a containment report yet. Start the decoy stack and run
+              <code> npx lxs selftest --report</code> from its configured project.
+            </div>
+          </div>
         </div>
       ) : con.loading ? (
         <TableSkeleton rows={2} />

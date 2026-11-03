@@ -17,6 +17,7 @@ async function main(): Promise<void> {
       .insert(users)
       .values({
         email: DEMO_EMAIL,
+        username: 'demo-analyst',
         name: 'Demo Analyst',
         passwordHash: await hashPassword(DEMO_PASSWORD),
       })

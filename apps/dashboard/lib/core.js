@@ -1,7 +1,10 @@
-// Fetch client for the LXS platform API (/v1). Falls back to lib/mock.js automatically
-// when the API is unreachable (network failure, 5xx, 401/403, or an unknown project), and flips the
-// global "demo data" flag so the topbar can show a badge. When the API is up, real data wins.
-import { getApiUrl, loadConfig } from "./config";
+// Fetch client for the LXS platform API (/v1).
+//
+// Real data or a visible failure: reads throw on any failure and report it through
+// the API-problem store below, so the shell can say so. lib/mock.js is only used when
+// the operator set LXS_ALLOW_MOCK=1, only for reads, and only during an outage.
+// Mutations never touch the mock: a block that did not happen must not look like one.
+import { getAllowMock, getApiUrl, loadConfig } from "./config";
 import { PROJECT_ID as MOCK_PROJECT, mock, TECHNIQUES } from "./mock";
 
 /** The API base. A getter, not a constant: the real value arrives from /api/config
@@ -20,7 +23,6 @@ export class CoreError extends Error {
 
 /* ───────── demo flag (external store) ───────── */
 let demo = false;
-let downUntil = 0;
 const demoSubs = new Set();
 export const isDemo = () => demo;
 export function subscribeDemo(fn) {
@@ -30,15 +32,78 @@ export function subscribeDemo(fn) {
 function setDemo(v) {
   if (demo === v) return;
   demo = v;
+  // Leaving mock mode: failures recorded during the outage (some on the mock project's paths) are over.
+  if (!v) problems.clear();
   demoSubs.forEach((f) => f());
 }
 
 const e = encodeURIComponent;
 
-/** Never throws on HTTP status — only on network failure / timeout. */
-async function raw(path, { method = "GET", body, timeout = 2500 } = {}) {
+/* ───────── API problems (external store): what the shell banner shows ───────── */
+const PROBLEM_TTL_MS = 45_000; // a path nobody polls any more must not hold the banner up
+const PROBLEM_QUIET_MS = 15_000;
+const RANK = { session: 4, network: 3, timeout: 2, server: 1, forbidden: 0 };
+const problems = new Map();
+const problemSubs = new Set();
+let problem = null;
+let problemTimer = null;
+export const getApiProblem = () => problem;
+export function subscribeApiProblem(fn) {
+  problemSubs.add(fn);
+  return () => problemSubs.delete(fn);
+}
+function publishProblem() {
+  clearTimeout(problemTimer);
+  const now = Date.now();
+  for (const [k, p] of problems) if (now - p.at > PROBLEM_TTL_MS) problems.delete(k);
+  const worst = [...problems.values()].sort((a, b) => RANK[b.kind] - RANK[a.kind])[0] ?? null;
+  if (worst?.kind !== problem?.kind || worst?.message !== problem?.message) {
+    problem = worst;
+    problemSubs.forEach((f) => f());
+  }
+  if (problems.size) {
+    problemTimer = setTimeout(publishProblem, PROBLEM_TTL_MS);
+    problemTimer.unref?.();
+  }
+}
+function kindOf(err) {
+  if (!(err instanceof CoreError)) return "network";
+  if (err.status === 0) return err.timedOut ? "timeout" : "network";
+  if (err.status === 401) return "session";
+  if (err.status === 403) return "forbidden";
+  if (err.status >= 500 || err.status === 429) return "server";
+  return null; // 404, 409, 422...: the API is fine, the caller handles the answer
+}
+function recordProblem(path, err) {
+  const kind = kindOf(err);
+  if (kind) problems.set(path, { kind, message: err.message, at: Date.now() });
+  else problems.delete(path);
+  publishProblem();
+}
+function recordOk(path) {
+  // A reply proves the API is reachable and the session is good, whichever path it was.
+  // A failure nobody has repeated lately belongs to a page we left, or to an outage now over.
+  const now = Date.now();
+  for (const [k, p] of problems)
+    if (k === path || p.kind === "network" || p.kind === "session" || now - p.at > PROBLEM_QUIET_MS)
+      problems.delete(k);
+  publishProblem();
+}
+
+/* Reads get long enough for the aggregates on screen; a mutation gets longer still,
+   because giving up early on one means reporting a failure for something that landed. */
+const READ_MS = 8_000;
+const SLOW_READ_MS = 15_000;
+const MUTATION_MS = 20_000;
+const SLOW = { timeout: SLOW_READ_MS };
+
+/** Never throws on HTTP status. Network failure / timeout throw a CoreError with status 0. */
+async function raw(path, { method = "GET", body, timeout } = {}) {
+  await loadConfig(); // the real API URL and the mock switch both arrive with it
+  const read = method === "GET";
+  const limit = timeout ?? (read ? READ_MS : MUTATION_MS);
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeout);
+  const timer = setTimeout(() => ctrl.abort(), limit);
   try {
     const res = await fetch(`${coreUrl()}${path}`, {
       method,
@@ -61,6 +126,17 @@ async function raw(path, { method = "GET", body, timeout = 2500 } = {}) {
       }
     }
     return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    const timedOut = ctrl.signal.aborted;
+    const what = timedOut
+      ? `No response from the API within ${limit / 1000} s`
+      : `Could not reach the API at ${coreUrl()}`;
+    // The request may have reached the server, so a mutation's outcome is genuinely unknown.
+    const unknown = read ? "" : ". It may still have been applied: check before retrying";
+    const out = new CoreError(`${what}${unknown}`, 0, null);
+    out.timedOut = timedOut;
+    out.cause = err;
+    throw out;
   } finally {
     clearTimeout(timer);
   }
@@ -70,48 +146,59 @@ async function raw(path, { method = "GET", body, timeout = 2500 } = {}) {
 async function strict(path, opts) {
   const r = await raw(path, opts);
   if (!r.ok)
-    throw new CoreError(
-      r.data?.error?.message || `HTTP ${r.status} on ${path}`,
-      r.status,
-      r.data,
-      path,
-    );
+    throw new CoreError(r.data?.error?.message || `HTTP ${r.status} on ${path}`, r.status, r.data);
   return r.data;
 }
 
-function shouldFallback(err, path) {
-  if (!(err instanceof CoreError)) return true; // network failure / abort / CORS
-  if (err.status >= 500 || err.status === 401 || err.status === 403) return true;
-  // unknown project, or a mock id (inc_*/att_*) asked of a real API: keep the demo coherent
-  if (
-    err.status === 404 &&
-    (/\/projects\//.test(path || "") ||
-      demo ||
-      /\/(incidents|attackers)\/(inc|att)_/.test(path || ""))
-  )
-    return true;
-  return false;
-}
-
-/** Try the real API; on unreachable fall back to the mock producer. */
-async function call(path, opts, fallback) {
-  if (Date.now() < downUntil) {
-    setDemo(true);
-    return fallback();
-  }
+/** strict() plus problem reporting, so a failure is visible even where stale data stays up. */
+async function tracked(path, opts) {
   try {
     const out = await strict(path, opts);
+    recordOk(path);
+    return out;
+  } catch (err) {
+    if (err.status === 401 || err.status === 403) setDemo(false);
+    recordProblem(path, err);
+    throw err;
+  }
+}
+
+/** Outages only. 401 and 403 are answers from a healthy API: they stay errors, even here. */
+function shouldFallback(err, path) {
+  if (!(err instanceof CoreError)) return true;
+  if (err.status === 0 || err.status >= 500) return true;
+  // the mock project id, or a mock id (inc_*/att_*), asked of a recovered API
+  return (
+    err.status === 404 &&
+    (path.includes(`/projects/${MOCK_PROJECT}`) || /\/(incidents|attackers)\/(inc|att)_/.test(path))
+  );
+}
+
+/** A read. Falls back to the mock producer only under LXS_ALLOW_MOCK=1. */
+async function call(path, opts, fallback) {
+  await loadConfig();
+  if (!getAllowMock()) return tracked(path, opts);
+  try {
+    const out = await tracked(path, opts);
     setDemo(false);
     return out;
   } catch (err) {
     if (shouldFallback(err, path)) {
-      downUntil = Date.now() + 8000;
       setDemo(true);
       return fallback();
     }
+    setDemo(false);
     throw err;
   }
 }
+
+/** A write. There is deliberately no fallback parameter. */
+const mutate = (path, method, body) =>
+  strict(path, { method, body }).catch((err) => {
+    if (err.status === 401 || err.status === 403) setDemo(false);
+    if (kindOf(err) === "session" || kindOf(err) === "forbidden") recordProblem(path, err);
+    throw err;
+  });
 
 export const list = (d) =>
   Array.isArray(d)
@@ -182,10 +269,14 @@ function normMatrix(m) {
 }
 
 export const api = {
-  overview: (pid = PROJECT) =>
-    call(`/v1/projects/${e(pid)}/overview`, undefined, () => mock.overview()),
+  projects: async () => list(await tracked("/v1/projects")),
+  createProject: (body) => mutate("/v1/projects", "POST", body),
+  createKey: async (body) => mutate(`/v1/projects/${e(await resolveProject())}/keys`, "POST", body),
+  revokeKey: async (kid) =>
+    mutate(`/v1/projects/${e(await resolveProject())}/keys/${e(kid)}`, "DELETE"),
+  overview: (pid = PROJECT) => call(`/v1/projects/${e(pid)}/overview`, SLOW, () => mock.overview()),
   incidents: async (pid = PROJECT, q = "?limit=200") =>
-    list(await call(`/v1/projects/${e(pid)}/incidents${q}`, undefined, () => mock.incidents())).map(
+    list(await call(`/v1/projects/${e(pid)}/incidents${q}`, SLOW, () => mock.incidents())).map(
       normIncident,
     ),
   incident: async (iid) => {
@@ -195,21 +286,21 @@ export const api = {
   },
   incidentEvents: async (iid) =>
     list(await call(`/v1/incidents/${e(iid)}/events`, undefined, () => mock.incidentEvents(iid))),
-  patchIncident: (iid, body) =>
-    call(`/v1/incidents/${e(iid)}`, { method: "PATCH", body }, () => mock.patchIncident(iid, body)),
+  patchIncident: (iid, body) => mutate(`/v1/incidents/${e(iid)}`, "PATCH", body),
   bulkResolveNoise: async (ids) => {
-    if (isDemo()) return mock.bulkResolveNoise();
-    await Promise.all(
-      ids.map((id) =>
-        strict(`/v1/incidents/${e(id)}`, { method: "PATCH", body: { status: "resolved" } }),
-      ),
+    const results = await Promise.allSettled(
+      ids.map((id) => mutate(`/v1/incidents/${e(id)}`, "PATCH", { status: "resolved" })),
     );
+    const failed = results.filter((r) => r.status === "rejected");
+    if (failed.length)
+      throw new CoreError(
+        `Resolved ${ids.length - failed.length} of ${ids.length}: ${failed[0].reason.message}`,
+        failed[0].reason.status,
+      );
     return ids.length;
   },
-  action: (iid, body) =>
-    call(`/v1/incidents/${e(iid)}/actions`, { method: "POST", body }, () => mock.action(iid, body)),
-  note: (iid, body) =>
-    call(`/v1/incidents/${e(iid)}/notes`, { method: "POST", body }, () => ({ ok: true })),
+  action: (iid, body) => mutate(`/v1/incidents/${e(iid)}/actions`, "POST", body),
+  note: (iid, body) => mutate(`/v1/incidents/${e(iid)}/notes`, "POST", body),
   attackers: async (pid = PROJECT, q = "") =>
     list(await call(`/v1/projects/${e(pid)}/attackers${q}`, undefined, () => mock.attackers())),
   attacker: async (aid) => {
@@ -218,49 +309,41 @@ export const api = {
     return r;
   },
   events: async (pid = PROJECT, q = "?limit=200") =>
-    list(await call(`/v1/projects/${e(pid)}/events${q}`, undefined, () => mock.events())),
+    list(await call(`/v1/projects/${e(pid)}/events${q}`, SLOW, () => mock.events())),
   attackMatrix: async (pid = PROJECT) =>
-    normMatrix(
-      await call(`/v1/projects/${e(pid)}/attack-matrix`, undefined, () => mock.attackMatrix()),
-    ),
+    normMatrix(await call(`/v1/projects/${e(pid)}/attack-matrix`, SLOW, () => mock.attackMatrix())),
   decoys: async (pid = PROJECT) =>
     list(await call(`/v1/projects/${e(pid)}/decoys`, undefined, () => mock.decoys())),
   containment: (pid = PROJECT) =>
     call(`/v1/projects/${e(pid)}/containment`, undefined, () => mock.containment()),
   blocklist: async (pid = PROJECT) =>
     list(await call(`/v1/projects/${e(pid)}/blocklist`, undefined, () => mock.blocklist())),
-  addBlock: (pid = PROJECT, body) =>
-    call(`/v1/projects/${e(pid)}/blocklist`, { method: "POST", body }, () => mock.addBlock(body)),
-  unblock: (pid = PROJECT, bid) =>
-    call(`/v1/projects/${e(pid)}/blocklist/${e(bid)}`, { method: "DELETE" }, () =>
-      mock.unblock(bid),
-    ),
+  addBlock: (pid = PROJECT, body) => mutate(`/v1/projects/${e(pid)}/blocklist`, "POST", body),
+  unblock: (pid = PROJECT, bid) => mutate(`/v1/projects/${e(pid)}/blocklist/${e(bid)}`, "DELETE"),
   audit: async (pid = PROJECT, q = "?limit=200") =>
     list(await call(`/v1/projects/${e(pid)}/audit${q}`, undefined, () => mock.audit())),
   settings: (pid = PROJECT) => call(`/v1/projects/${e(pid)}`, undefined, () => mock.settings()),
   onboarding: (pid = PROJECT) =>
     call(`/v1/projects/${e(pid)}/onboarding`, undefined, () => mock.onboarding()),
   replay: (pid = PROJECT, body = { scenario: "ps-use-case" }) =>
-    call(`/v1/projects/${e(pid)}/demo/replay`, { method: "POST", body }, () => mock.replay()),
+    mutate(`/v1/projects/${e(pid)}/demo/replay`, "POST", body),
   system: () => call("/v1/system", undefined, () => mock.system()),
-  retryJob: (id) =>
-    isDemo() ? mock.retryJob(id) : strict(`/v1/system/jobs/${e(id)}/retry`, { method: "POST" }),
+  retryJob: (id) => mutate(`/v1/system/jobs/${e(id)}/retry`, "POST"),
   iocsUrl: (pid, iid, fmt) =>
     `${coreUrl()}/v1/projects/${e(pid)}/iocs?incident=${e(iid)}&format=${e(fmt)}`,
-  iocs: async (pid = PROJECT, iid, fmt = "json") => {
-    if (isDemo()) return mock.iocs(iid, fmt);
-    const r = await raw(`/v1/projects/${e(pid)}/iocs?incident=${e(iid)}&format=${e(fmt)}`);
-    if (!r.ok) return mock.iocs(iid, fmt);
-    return r.data;
-  },
+  iocs: (pid = PROJECT, iid, fmt = "json") =>
+    call(`/v1/projects/${e(pid)}/iocs?incident=${e(iid)}&format=${e(fmt)}`, SLOW, () => {
+      if (!mock.incident(iid)) throw new CoreError("Platform API unavailable", 0);
+      return mock.iocs(iid, fmt);
+    }),
 };
 
 export const streamUrl = (pid = PROJECT) => `${coreUrl()}/v1/stream?project=${e(pid)}`;
 
 /* ───────── project discovery ─────────
-   A project pinned in runtime config wins. Otherwise GET /v1/projects (the API runs with
-   DEV_AUTH_BYPASS in dev) and take `acme-shop`, else the first one. If the API is
-   unreachable we fall back to the mock project id and the demo badge appears. */
+   A project pinned in runtime config wins. Otherwise GET /v1/projects and take
+   `acme-shop`, else the first one. Failure rejects and is retried on the next call;
+   only under LXS_ALLOW_MOCK=1 does an outage resolve to the mock project instead. */
 let projectPromise = null;
 let projectAt = 0;
 export function resolveProject() {
@@ -268,26 +351,38 @@ export function resolveProject() {
   projectAt = Date.now();
   // Runtime config first: it may pin a project explicitly, and it carries the API
   // URL that the /v1/projects lookup below depends on.
-  projectPromise = loadConfig()
-    .then((cfg) => (cfg.projectId ? { ok: true, pinned: cfg.projectId } : raw("/v1/projects")))
-    .then((r) => {
-      if (r.pinned) {
-        projectAt = Date.now() + 3600e3;
-        return r.pinned;
-      }
-      const items = r.ok ? list(r.data) : [];
+  const pending = loadConfig()
+    .then((cfg) => tracked("/v1/projects").then((result) => ({ cfg, items: list(result) })))
+    .then(({ cfg, items }) => {
+      const selectedId =
+        typeof window !== "undefined" ? window.localStorage?.getItem("lxs.projectId") : null;
       const p =
+        items.find((x) => x.id === selectedId) ||
+        items.find((x) => x.id === cfg.projectId) ||
         items.find((x) => x.slug === "acme-shop") ||
         items.find((x) => x.environment === "demo") ||
         items[0];
-      if (p?.id) {
-        projectAt = Date.now() + 3600e3;
-        return p.id;
-      }
-      return MOCK_PROJECT;
+      if (!p?.id) throw new CoreError("This account has no projects", 404);
+      projectAt = Date.now() + 3600e3;
+      return p.id;
     })
-    .catch(() => MOCK_PROJECT);
-  return projectPromise;
+    .catch((err) => {
+      if (getAllowMock() && shouldFallback(err, "/v1/projects")) {
+        projectAt = 0; // not cached: the next poll must be able to find the real project
+        return MOCK_PROJECT;
+      }
+      if (projectPromise === pending) projectPromise = null;
+      throw err;
+    });
+  projectPromise = pending;
+  return pending;
+}
+
+export function setActiveProject(projectId) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem("lxs.projectId", projectId);
+  projectPromise = null;
+  projectAt = 0;
 }
 
 // Every project-scoped call resolves the live project id first and ignores the caller-supplied one.
@@ -423,7 +518,27 @@ function normContainment(c) {
 }
 
 function normMatrix2(m) {
-  if (m?.tactics) return m;
+  // The platform API groups techniques by tactic, while the mock API returns a
+  // flat technique list. Normalize both envelopes into the heatmap's view model.
+  if (Array.isArray(m?.tactics)) {
+    return {
+      tactics: m.tactics.map((group) => ({
+        tactic: titleCase(group.tactic).replace("And", "and"),
+        techniques: (group.techniques || []).map((r) => {
+          const id = r.id || r.technique_id;
+          if (id && !TECHNIQUES[id])
+            TECHNIQUES[id] = { name: r.name || id, tactic: group.tactic, desc: "", count: 0 };
+          return {
+            ...r,
+            id,
+            name: r.name || id,
+            count: r.count ?? r.hits ?? r.incidents ?? 0,
+            incidents: r.incidents ?? 0,
+          };
+        }),
+      })),
+    };
+  }
   const rows = list(m?.techniques ? m.techniques : m);
   const norm = rows.map((r) => ({
     id: r.id || r.technique_id,
@@ -485,16 +600,29 @@ wrap("onboarding", (o) => ({
   const base = api.settings;
   api.settings = async (...a) => {
     const s = await base(...a);
-    if (s.keys || isDemo()) return s;
+    if (s.keys && !isDemo()) return s;
     const pid = await resolveProject();
+    const settingsResource = async (path) => {
+      try {
+        const result = await strict(path);
+        recordOk(path);
+        return result;
+      } catch (err) {
+        if (err.status === 401) setDemo(false);
+        if (err.status === 403) return [];
+        if (isDemo() && shouldFallback(err, path)) return [];
+        recordProblem(path, err);
+        throw err;
+      }
+    };
     const [keys, ch] = await Promise.all([
-      raw(`/v1/projects/${e(pid)}/keys`).catch(() => null),
-      raw(`/v1/projects/${e(pid)}/notification-channels`).catch(() => null),
+      settingsResource(`/v1/projects/${e(pid)}/keys`),
+      settingsResource(`/v1/projects/${e(pid)}/notification-channels`),
     ]);
     return {
       project: { id: s.id, name: s.name },
-      keys: (keys?.ok ? list(keys.data) : []).filter((k) => !k.revoked_at),
-      channels: (ch?.ok ? list(ch.data) : []).map((c) => ({
+      keys: list(keys).filter((k) => !k.revoked_at),
+      channels: list(ch).map((c) => ({
         ...c,
         label: c.label || c.name || c.type,
         target: c.target || c.url || "",

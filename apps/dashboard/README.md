@@ -12,16 +12,22 @@ npm run dev                  # http://localhost:3000
 npm run build && npm start   # production check
 ```
 
-No API needed. When the platform API is unreachable (network error, 5xx, 401/403, unknown project) the dashboard falls back
-to the built-in dataset in `lib/mock.js` and shows a **Demo data** badge in the topbar. A simulated live stream adds a decoy
-event every few seconds. When the API is up, real data wins (re-checked every few seconds).
+The dashboard shows real data or a visible failure. If the API is unreachable, slow, or refuses
+the session, a red banner says so, pages show an error or their last good data, and actions
+report the real error.
+
+Set `LXS_ALLOW_MOCK=1` to work without an API. During an outage, reads then fall back to the
+built-in dataset in `lib/mock.js` under a full-width red **MOCK DATA** banner, with a simulated
+live stream. Real data returns as soon as the API does. 401 and 403 never fall back, and neither
+does any action: block, unblock, status changes and replay always go to the real API.
 
 ## Config (optional, `.env.local`)
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Platform API base URL (`/v1/...`, SSE at `/v1/stream?project=`) |
-| `NEXT_PUBLIC_PROJECT_ID` | auto | Project id. If unset, the dashboard calls `GET /v1/projects` (API runs with `DEV_AUTH_BYPASS=true` in dev) and picks `acme-shop`, else the first project; with no API it uses the demo project |
+| `NEXT_PUBLIC_PROJECT_ID` | auto | Project id. If unset, the dashboard calls `GET /v1/projects` (API runs with `DEV_AUTH_BYPASS=true` in dev) and picks `acme-shop`, else the first project |
+| `LXS_ALLOW_MOCK` | off | `1` allows mock reads during an API outage (see above). Read at runtime by `/api/config` |
 
 Requests use `credentials: 'include'` (session cookie); the API must allow the dashboard origin via CORS.
 
@@ -35,7 +41,7 @@ Requests use `credentials: 'include'` (session cookie); the API must allow the d
 Routes: `/`, `/feed`, `/incidents`, `/incidents/[id]`, `/attackers`, `/attackers/[id]`, `/attack`, `/decoys`, `/blocklist`,
 `/audit`, `/settings`, `/system`, `/onboarding`.
 
-Layout: `app/` pages, `components/` (Shell, ui, workspace, charts, killchain), `lib/` (core fetch client with mock fallback,
+Layout: `app/` pages, `components/` (Shell, ui, workspace, charts, killchain), `lib/` (core fetch client with opt-in mock reads,
 sse, store, hooks, labels, nav, toast, utils, mock).
 
 ## Design system

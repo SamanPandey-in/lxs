@@ -13,6 +13,7 @@ const RANK: Record<Role, number> = { viewer: 1, analyst: 2, owner: 3 };
 export interface SessionUser {
   id: string;
   email: string;
+  username: string;
   name: string;
 }
 
@@ -24,9 +25,9 @@ declare module 'fastify' {
 
 export const SESSION_COOKIE = 'ds_session';
 
-export function issueSession(reply: FastifyReply, userId: string): void {
+export function issueSession(reply: FastifyReply, userId: string, version: number): void {
   const exp = Math.floor(Date.now() / 1000) + env.SESSION_TTL_HOURS * 3600;
-  const token = signToken({ uid: userId, exp }, env.SESSION_SECRET);
+  const token = signToken({ uid: userId, exp, ver: version }, env.SESSION_SECRET);
   void reply.setCookie(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
@@ -46,25 +47,37 @@ const allowedOrigins = new Set(
     .filter(Boolean),
 );
 export const isAllowedOrigin = (origin: string | undefined): boolean =>
-  !!origin && (allowedOrigins.has(origin) || allowedOrigins.has('*') || origin === env.PUBLIC_URL);
+  !!origin && origin !== 'null' && (allowedOrigins.has(origin) || origin === env.PUBLIC_URL);
 
 async function loadUser(req: FastifyRequest): Promise<SessionUser | null> {
   const raw = req.cookies?.[SESSION_COOKIE];
   if (raw) {
-    const tok = verifyToken<{ uid: string; exp: number }>(raw, env.SESSION_SECRET);
-    if (tok) {
+    const tok = verifyToken<{ uid: string; exp: number; ver: number }>(raw, env.SESSION_SECRET);
+    if (tok && typeof tok.uid === 'string' && tok.uid.length > 0 && Number.isInteger(tok.ver)) {
       const [u] = await db
-        .select({ id: users.id, email: users.email, name: users.name })
+        .select({
+          id: users.id,
+          email: users.email,
+          username: users.username,
+          name: users.name,
+          sessionVersion: users.sessionVersion,
+        })
         .from(users)
         .where(eq(users.id, tok.uid))
         .limit(1);
-      if (u) return u;
+      if (u && u.sessionVersion === tok.ver) {
+        return { id: u.id, email: u.email, username: u.username, name: u.name };
+      }
     }
   }
-  if (env.DEV_AUTH_BYPASS) {
+  if (
+    env.DEV_AUTH_BYPASS &&
+    env.NODE_ENV === 'development' &&
+    ['127.0.0.1', '::1', 'localhost'].includes(env.HOST)
+  ) {
     // Dev convenience: anonymous requests act as the oldest user.
     const [u] = await db
-      .select({ id: users.id, email: users.email, name: users.name })
+      .select({ id: users.id, email: users.email, username: users.username, name: users.name })
       .from(users)
       .orderBy(asc(users.createdAt))
       .limit(1);
@@ -73,11 +86,11 @@ async function loadUser(req: FastifyRequest): Promise<SessionUser | null> {
   return null;
 }
 
-/** preHandler: requires a session (cookie); mutations also get a CSRF Origin check. */
+/** preHandler: requires a session cookie; browser mutations must carry an allowed Origin. */
 export async function requireSession(req: FastifyRequest, _reply: FastifyReply): Promise<void> {
   if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
     const origin = req.headers.origin;
-    if (origin && !isAllowedOrigin(origin)) throw forbidden('Origin not allowed', 'csrf_origin');
+    if (!isAllowedOrigin(origin)) throw forbidden('A trusted Origin is required', 'csrf_origin');
   }
   const user = await loadUser(req);
   if (!user) throw unauthorized();

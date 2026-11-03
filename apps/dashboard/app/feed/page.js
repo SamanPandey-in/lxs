@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   EmptyState,
+  ErrorState,
   PageHeader,
   Pill,
   SeverityPill,
@@ -121,6 +122,8 @@ export default function FeedPage() {
         </div>
         {!st.bootstrapped ? (
           <TableSkeleton />
+        ) : !st.loaded && st.error ? (
+          <ErrorState error={st.error} onRetry={storeActions.refresh} what="events" />
         ) : rows.length === 0 ? (
           <EmptyState icon={Radio} title="No events match">
             Loosen the filters, or wait for the next decoy touch.

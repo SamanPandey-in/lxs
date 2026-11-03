@@ -22,17 +22,22 @@ const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' 
 const createdAt = () => ts('created_at').notNull().defaultNow();
 const pk = () => uuid('id').primaryKey().default(sql`gen_random_uuid()`);
 
-/** Minimal local users table. Better Auth (Phase 3b) will replace this. */
+/** Prototype email/password users and JWT-backed sessions. */
 export const users = pgTable(
   'users',
   {
     id: pk(),
     email: text('email').notNull(),
+    username: text('username').notNull(),
     passwordHash: text('password_hash').notNull(),
+    sessionVersion: integer('session_version').notNull().default(0),
     name: text('name').notNull().default(''),
     createdAt: createdAt(),
   },
-  (t) => [uniqueIndex('users_email_uq').on(t.email)],
+  (t) => [
+    uniqueIndex('users_email_uq').on(t.email),
+    uniqueIndex('users_username_uq').on(t.username),
+  ],
 );
 
 export const organizations = pgTable(

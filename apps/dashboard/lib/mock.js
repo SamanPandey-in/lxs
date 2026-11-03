@@ -1,5 +1,6 @@
 // Demo dataset for the LXS dashboard. Shapes match packages/schema/src/api.ts.
-// lib/core.js falls back to this automatically whenever the platform API is unreachable.
+// Read-only: lib/core.js uses it during an API outage, and only under LXS_ALLOW_MOCK=1.
+// There are deliberately no mutations here. A mock block would report success for nothing.
 
 const NOW = Date.now();
 const iso = (secAgo) => new Date(NOW - secAgo * 1000).toISOString();
@@ -1980,17 +1981,6 @@ function applyBlockExpiry() {
   });
 }
 
-const audit = (actor, action, target, metadata = {}) =>
-  db.audit.unshift({
-    id: `aud_x${Date.now() % 100000}`,
-    at: new Date().toISOString(),
-    actor,
-    action,
-    target,
-    metadata,
-    ip: "10.8.0.14",
-  });
-
 export const mock = {
   projectId: PROJECT_ID,
   overview: () => clone(buildOverview()),
@@ -2044,121 +2034,10 @@ export const mock = {
   settings: () => clone(db.settings),
   system: () => clone(db.system),
   onboarding: () => clone(db.onboarding),
-  patchIncident: (id, body) => {
-    const i = db.incidents.find((x) => x.id === id);
-    if (!i) return null;
-    const from = i.status;
-    if (body.status) i.status = body.status;
-    audit(
-      "you@acme.example",
-      body.status === "acknowledged"
-        ? "incident.acknowledge"
-        : body.status === "false_positive"
-          ? "incident.false_positive"
-          : "incident.resolve",
-      `incident #${i.number}`,
-      { from, to: i.status },
-    );
-    return clone(i);
-  },
-  bulkResolveNoise: () => {
-    let n = 0;
-    db.incidents.forEach((i) => {
-      if (i.label === "noise" && i.status === "open") {
-        i.status = "resolved";
-        n += 1;
-      }
-    });
-    if (n) audit("you@acme.example", "incident.resolve", `${n} noise incident(s)`, { bulk: true });
-    return n;
-  },
-  action: (id, body) => {
-    const i = db.incidents.find((x) => x.id === id);
-    if (body.type === "block_ip") {
-      const hours = body.params?.duration_hours || 24;
-      const entry = {
-        id: `blk_${Date.now() % 100000}`,
-        ip: body.params.ip,
-        reason: body.reason || `Blocked from incident #${i?.number}`,
-        incident_id: id,
-        incident_number: i?.number ?? null,
-        created_by: "you@acme.example",
-        created_at: new Date().toISOString(),
-        expires_at: new Date(Date.now() + hours * 3600e3).toISOString(),
-        status: "pending",
-        applied_sensors: 0,
-        total_sensors: 3,
-      };
-      db.blocklist.unshift(entry);
-      audit("you@acme.example", "block_ip", `${body.params.ip} (inc #${i?.number})`, {
-        duration_hours: hours,
-      });
-      setTimeout(() => {
-        entry.status = "applied";
-        entry.applied_sensors = 3;
-      }, 2600);
-      return {
-        action_id: `act_${Date.now() % 100000}`,
-        status: "pending",
-        policy_version: 45,
-        blocklist_entry_id: entry.id,
-      };
-    }
-    if (body.type === "unblock_ip") {
-      db.blocklist.forEach((b) => {
-        if (b.ip === body.params.ip && b.status !== "expired") {
-          b.status = "expired";
-          b.expires_at = new Date().toISOString();
-        }
-      });
-      audit("you@acme.example", "unblock_ip", `${body.params.ip}`, {});
-      return { action_id: `act_${Date.now() % 100000}`, status: "applied", policy_version: 46 };
-    }
-    audit("you@acme.example", "export_iocs", `incident #${i?.number}`, {
-      format: body.params?.format,
-    });
-    return { action_id: `act_${Date.now() % 100000}`, status: "applied" };
-  },
-  unblock: (bid) => {
-    const b = db.blocklist.find((x) => x.id === bid);
-    if (b) {
-      b.status = "expired";
-      b.expires_at = new Date().toISOString();
-      audit("you@acme.example", "unblock_ip", b.ip, {});
-    }
-    return { ok: true };
-  },
-  addBlock: ({ ip, reason, duration_hours = 24 }) => {
-    const entry = {
-      id: `blk_${Date.now() % 100000}`,
-      ip,
-      reason: reason || "Manual block",
-      incident_id: null,
-      incident_number: null,
-      created_by: "you@acme.example",
-      created_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + duration_hours * 3600e3).toISOString(),
-      status: "pending",
-      applied_sensors: 0,
-      total_sensors: 3,
-    };
-    db.blocklist.unshift(entry);
-    audit("you@acme.example", "block_ip", ip, { duration_hours, manual: true });
-    setTimeout(() => {
-      entry.status = "applied";
-      entry.applied_sensors = 3;
-    }, 2200);
-    return entry;
-  },
   isBlocked: (ip) => {
     applyBlockExpiry();
     return db.blocklist.find((b) => b.ip === ip && b.status !== "expired") || null;
   },
-  retryJob: (id) => {
-    db.system.failed_jobs = db.system.failed_jobs.filter((j) => j.id !== id);
-    return { ok: true };
-  },
-  replay: () => ({ ok: true, scenario: "ps-use-case", events: 17 }),
   iocs: (incidentId, format = "json") => {
     const i = db.incidents.find((x) => x.id === incidentId);
     const evs = events.filter((e) => e.incident_id === incidentId);

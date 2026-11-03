@@ -14,6 +14,8 @@ export function GET() {
       apiUrl: process.env.LXS_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080",
       // null means "ask the API which project to show" (lib/core.js resolveProject).
       projectId: process.env.LXS_PROJECT_ID || process.env.NEXT_PUBLIC_PROJECT_ID || null,
+      // Off unless an operator opts in: lets reads show lib/mock.js during an API outage.
+      allowMock: process.env.LXS_ALLOW_MOCK === "1",
     },
     { headers: { "cache-control": "no-store" } },
   );

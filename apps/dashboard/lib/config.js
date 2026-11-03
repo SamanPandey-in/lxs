@@ -10,10 +10,12 @@ const BUILD_DEFAULT_PROJECT = process.env.NEXT_PUBLIC_PROJECT_ID || null;
 
 let apiUrl = BUILD_DEFAULT_API;
 let projectId = BUILD_DEFAULT_PROJECT;
+let allowMock = false; // off until the server says otherwise, so a failed config fetch fails closed
 let loaded = null;
 
 export const getApiUrl = () => apiUrl;
 export const getConfiguredProject = () => projectId;
+export const getAllowMock = () => allowMock;
 
 /**
  * Load runtime config. Safe to call repeatedly — the fetch happens once.
@@ -28,6 +30,7 @@ export function loadConfig() {
     .then((cfg) => {
       if (cfg?.apiUrl) apiUrl = cfg.apiUrl;
       if (cfg?.projectId) projectId = cfg.projectId;
+      allowMock = cfg?.allowMock === true;
       return { apiUrl, projectId };
     })
     .catch(() => ({ apiUrl, projectId }));

@@ -29,22 +29,40 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 const B64 = (b: Buffer) => b.toString('base64url');
 
-/** Signed, expiring token: base64url(json).hmac */
+/** Compact HS256 JWT. */
 export function signToken(payload: Record<string, unknown>, secret: string): string {
+  const header = B64(Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
   const body = B64(Buffer.from(JSON.stringify(payload)));
-  const sig = B64(createHmac('sha256', secret).update(body).digest());
-  return `${body}.${sig}`;
+  const signingInput = `${header}.${body}`;
+  const sig = B64(createHmac('sha256', secret).update(signingInput).digest());
+  return `${signingInput}.${sig}`;
 }
 
 export function verifyToken<T extends { exp?: number }>(token: string, secret: string): T | null {
-  const [body, sig] = token.split('.');
-  if (!body || !sig) return null;
-  const expected = createHmac('sha256', secret).update(body).digest();
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [header, body, sig] = parts;
+  if (!header || !body || !sig) return null;
+  try {
+    const decodedHeader = JSON.parse(Buffer.from(header, 'base64url').toString('utf8')) as {
+      alg?: string;
+      typ?: string;
+    };
+    if (decodedHeader.alg !== 'HS256' || decodedHeader.typ !== 'JWT') return null;
+  } catch {
+    return null;
+  }
+  const expected = createHmac('sha256', secret).update(`${header}.${body}`).digest();
   const given = Buffer.from(sig, 'base64url');
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as T;
-    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
+    if (
+      typeof payload.exp !== 'number' ||
+      !Number.isFinite(payload.exp) ||
+      payload.exp * 1000 <= Date.now()
+    )
+      return null;
     return payload;
   } catch {
     return null;

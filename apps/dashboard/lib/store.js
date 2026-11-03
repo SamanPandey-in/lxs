@@ -1,7 +1,7 @@
 "use client";
 // External live store: REST bootstrap + SSE (or a simulated stream in demo mode) -> useStore().
 import { useSyncExternalStore } from "react";
-import { api, isDemo, PROJECT, resolveProject, streamUrl } from "./core";
+import { api, isDemo, PROJECT, resolveProject, streamUrl, subscribeDemo } from "./core";
 import { nextLiveEvent } from "./mock";
 import { connectStream } from "./sse";
 
@@ -24,6 +24,8 @@ const s = {
   conn: "connecting",
   demo: false,
   bootstrapped: false,
+  // True from the first successful pull. Until then an empty store means "unknown", not "nothing happening".
+  loaded: false,
   error: null,
   overview: null,
   incidents: new Map(),
@@ -50,6 +52,9 @@ let refreshTimer = null;
 let pollTimer = null;
 let pollEveryMs = 0;
 let sawLive = false;
+let eventsLoaded = false;
+// What the stream itself last reported. A failed REST pull marks us offline; this restores the truth.
+let streamConn = "connecting";
 
 /* How often to reconcile over REST.
    The stream is the live path: when it is up, polling is only a safety net against a
@@ -126,24 +131,41 @@ function queueEvents(evs) {
  * first load and after a reconnect, when we may have missed frames.
  */
 async function pull({ withEvents } = { withEvents: true }) {
+  // A failed first load must not leave the feed empty for good: the reconcile skips events.
+  const needEvents = withEvents || !eventsLoaded;
   try {
     const [overview, incidents, decoys, events] = await Promise.all([
       api.overview(PROJECT),
       api.incidents(PROJECT),
       api.decoys(PROJECT),
-      withEvents ? api.events(PROJECT) : Promise.resolve(null),
+      needEvents ? api.events(PROJECT) : Promise.resolve(null),
     ]);
     s.overview = overview;
     s.incidents = new Map(incidents.map((i) => [i.id, i]));
     reorder();
-    if (events) mergeEvents(events);
+    if (events) {
+      mergeEvents(events);
+      eventsLoaded = true;
+    }
     s.decoys = decoys;
+    // Crossing between real and mock: events accumulate, so drop the other world's and refetch.
+    const crossed = s.loaded && s.demo !== isDemo();
     s.demo = isDemo();
     s.bootstrapped = true;
+    s.loaded = true;
     s.error = null;
     syncTransport();
+    if (crossed) {
+      s.events = [];
+      s.liveCount = 0;
+      pending = [];
+      eventsLoaded = false;
+      bootstrap();
+    }
   } catch (err) {
     s.error = err;
+    s.demo = isDemo();
+    if (ticker) syncTransport();
     setConn("offline");
     s.bootstrapped = true;
   }
@@ -163,7 +185,7 @@ function setConn(c) {
   const wasLive = s.conn === "live";
   s.conn = c;
   if (c === "demo") {
-    // The simulated stream feeds the store directly; REST polling would only fight it.
+    // Keep polling: that is how mock mode notices the API is back.
     schedulePoll();
     return;
   }
@@ -177,7 +199,6 @@ function setConn(c) {
 /** Interval the current state wants, or null for "do not poll at all". */
 function wantedInterval() {
   if (typeof document !== "undefined" && document.visibilityState === "hidden") return null;
-  if (s.conn === "demo") return null;
   return s.conn === "live" ? POLL_LIVE_MS : POLL_DOWN_MS;
 }
 
@@ -213,7 +234,9 @@ function syncTransport() {
       clearInterval(ticker);
       ticker = null;
     }
-    if (!stopStream) {
+    if (stopStream) {
+      setConn(streamConn);
+    } else {
       let stopped = false;
       let inner = null;
       stopStream = () => {
@@ -225,6 +248,7 @@ function syncTransport() {
         inner = connectStream({
           url: streamUrl(pid),
           onState: (c) => {
+            streamConn = c;
             setConn(c);
             publish();
           },
@@ -234,6 +258,14 @@ function syncTransport() {
     }
   }
 }
+
+// Stop the synthetic stream immediately if an authenticated request rejects the
+// session while the store is in demo mode.
+subscribeDemo(() => {
+  s.demo = isDemo();
+  syncTransport();
+  publish();
+});
 
 /**
  * A frame arrived that invalidates something the store does not hold inline.

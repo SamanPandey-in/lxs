@@ -667,7 +667,7 @@ export default function IncidentDetailPage() {
       const [events, attacker, blocklist, audit] = await Promise.all([
         api.incidentEvents(inc.id).catch(() => []),
         inc.attacker_id ? api.attacker(inc.attacker_id).catch(() => null) : null,
-        api.blocklist(PROJECT).catch(() => []),
+        api.blocklist(PROJECT),
         api.audit(PROJECT).catch(() => []),
       ]);
       return {
@@ -724,6 +724,7 @@ export default function IncidentDetailPage() {
     ) ||
     (inc.blocked
       ? {
+          id: inc.block_entry_id,
           status: "applied",
           applied_sensors: inc.blocked.applied_sensors ?? 0,
           total_sensors: inc.blocked.total_sensors ?? 0,
@@ -758,12 +759,17 @@ export default function IncidentDetailPage() {
         fmt === "csv" ? "json" : fmt === "stix" ? "json" : fmt,
       );
       exportIocs(iocs, fmt, inc.number);
-      toast(
-        `Exported ${iocs.indicators?.length ?? 0} IOCs as ${fmt.toUpperCase()}`,
-        "success",
-        "Written to the audit log.",
-      );
-      api.action(inc.id, { type: "export_iocs", params: { format: fmt } }).catch(() => {});
+      const count = iocs.indicators?.length ?? 0;
+      try {
+        await api.action(inc.id, { type: "export_iocs", params: { format: fmt } });
+        toast(
+          `Exported ${count} IOCs as ${fmt.toUpperCase()}`,
+          "success",
+          "Written to the audit log.",
+        );
+      } catch (e) {
+        toast(`Exported ${count} IOCs, but the audit entry failed`, "error", e.message);
+      }
     } catch (e) {
       toast("Export failed", "error", e.message);
     }

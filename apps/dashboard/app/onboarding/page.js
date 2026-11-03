@@ -2,7 +2,7 @@
 import { Check, Loader2, PartyPopper, Play, RotateCcw } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { CodeBlock, PageHeader, Pill } from "@/components/ui";
+import { CodeBlock, ErrorState, PageHeader, Pill } from "@/components/ui";
 import { SectionCard } from "@/components/workspace";
 import { api, PROJECT } from "@/lib/core";
 import { useAsync, useDemo } from "@/lib/hooks";
@@ -48,7 +48,7 @@ const COMMANDS = {
 export default function OnboardingPage() {
   const demo = useDemo();
   const st = useStore();
-  const { data, reload } = useAsync(() => api.onboarding(PROJECT), []);
+  const { data, error, reload } = useAsync(() => api.onboarding(PROJECT), []);
   const [steps, setSteps] = useState(null);
   const [running, setRunning] = useState(false);
   const [sim, setSim] = useState(false);
@@ -92,6 +92,14 @@ export default function OnboardingPage() {
       return i === -1 ? cur : cur.map((s, k) => (k === i ? { ...s, done: true } : s));
     });
   };
+
+  if (error && !data)
+    return (
+      <div className="ds-page">
+        <PageHeader eyebrow="SETUP / GET STARTED" title="Setup status unknown" />
+        <ErrorState error={error} onRetry={reload} what="setup progress" />
+      </div>
+    );
 
   return (
     <div className="ds-page">

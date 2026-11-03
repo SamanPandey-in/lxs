@@ -15,19 +15,10 @@ import {
   THead,
 } from "@/components/ui";
 import { RelativeTime, SectionCard } from "@/components/workspace";
-import { api, PROJECT } from "@/lib/core";
+import { api, PROJECT, setActiveProject } from "@/lib/core";
 import { useAsync } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
 import { stamp } from "@/lib/utils";
-
-function randKey() {
-  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  const arr = new Uint8Array(32);
-  (
-    globalThis.crypto || { getRandomValues: (a) => a.map(() => Math.floor(Math.random() * 256)) }
-  ).getRandomValues(arr);
-  return `ds_live_${[...arr].map((b) => abc[b % abc.length]).join("")}`;
-}
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.settings(PROJECT), []);
@@ -38,6 +29,10 @@ export default function SettingsPage() {
   const [ai, setAi] = useState(true);
   const [capture, setCapture] = useState("masked");
   const [newKey, setNewKey] = useState(null);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectName, setProjectName] = useState("");
+  const [projectBusy, setProjectBusy] = useState(false);
   const [hook, setHook] = useState(null);
 
   useEffect(() => {
@@ -63,20 +58,40 @@ export default function SettingsPage() {
       </div>
     );
 
-  const createKey = () => {
-    const k = randKey();
-    setKeys((ks) => [
-      {
-        id: `key_${Date.now()}`,
-        name: "new-key",
-        prefix: k.slice(0, 12),
-        created_at: new Date().toISOString(),
-        last_used_at: null,
-        scopes: ["ingest"],
-      },
-      ...ks,
-    ]);
-    setNewKey(k);
+  const createKey = async () => {
+    setKeyBusy(true);
+    try {
+      const key = await api.createKey({ name: `sensor-${keys.length + 1}` });
+      setKeys((current) => [key, ...current]);
+      setNewKey(key.key);
+    } catch (err) {
+      toast("Could not create key", "error", err.message);
+    } finally {
+      setKeyBusy(false);
+    }
+  };
+
+  const revokeKey = async (key) => {
+    try {
+      await api.revokeKey(key.id);
+      setKeys((current) => current.filter((item) => item.id !== key.id));
+      toast(`Revoked ${key.name}`, "warning", "Sensors using it will be refused.");
+    } catch (err) {
+      toast("Could not revoke key", "error", err.message);
+    }
+  };
+
+  const createProject = async () => {
+    setProjectBusy(true);
+    try {
+      const project = await api.createProject({ name: projectName });
+      setActiveProject(project.id);
+      window.location.assign("/dashboard");
+    } catch (err) {
+      toast("Could not create project", "error", err.message);
+    } finally {
+      setProjectBusy(false);
+    }
   };
 
   return (
@@ -86,13 +101,20 @@ export default function SettingsPage() {
         title="Settings"
         purpose={`Configuration for ${data?.project?.name || "this project"}. Ingest keys are write-only: a stolen key cannot read incidents or other projects.`}
         actions={
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() => toast("Settings saved", "success", "Policy version bumped and audited.")}
-          >
-            Save changes
-          </button>
+          <>
+            <button type="button" className="btn" onClick={() => setProjectOpen(true)}>
+              <Plus /> New project
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() =>
+                toast("Settings saved", "success", "Policy version bumped and audited.")
+              }
+            >
+              Save changes
+            </button>
+          </>
         }
       />
 
@@ -101,8 +123,8 @@ export default function SettingsPage() {
           title="Ingest keys"
           detail="Used by sensors and the SDK. Shown once at creation."
           action={
-            <button type="button" className="btn btn-sm" onClick={createKey}>
-              <Plus /> Create key
+            <button type="button" className="btn btn-sm" onClick={createKey} disabled={keyBusy}>
+              <Plus /> {keyBusy ? "Creating…" : "Create key"}
             </button>
           }
           flush
@@ -137,14 +159,7 @@ export default function SettingsPage() {
                         type="button"
                         className="btn btn-sm btn-ghost"
                         aria-label={`Revoke ${k.name}`}
-                        onClick={() => {
-                          setKeys((ks) => ks.filter((x) => x.id !== k.id));
-                          toast(
-                            `Revoked ${k.name}`,
-                            "warning",
-                            "Sensors using it will be refused.",
-                          );
-                        }}
+                        onClick={() => revokeKey(k)}
                       >
                         <Trash2 /> Revoke
                       </button>
@@ -261,6 +276,29 @@ export default function SettingsPage() {
           This is the only time the full key is shown. Store it in your sensor and SDK environment.
         </p>
         <CodeBlock>{newKey || ""}</CodeBlock>
+      </Modal>
+
+      <Modal
+        open={projectOpen}
+        onClose={() => setProjectOpen(false)}
+        title="Create a project"
+        actions={[
+          {
+            label: projectBusy ? "Creating…" : "Create project",
+            disabled: projectBusy || !projectName.trim(),
+            onClick: createProject,
+          },
+        ]}
+      >
+        <Field label="Project name" htmlFor="project-name">
+          <input
+            id="project-name"
+            value={projectName}
+            maxLength={128}
+            onChange={(event) => setProjectName(event.target.value)}
+            placeholder="Production app"
+          />
+        </Field>
       </Modal>
 
       <Modal
