@@ -248,6 +248,12 @@ const SCENARIOS: Record<string, (ip: string) => Step[]> = {
       }),
     },
   ],
+  dynamic: () => [
+    { gap: 0, ev: ssh('ssh.client', { client_banner: 'SSH-2.0-OpenSSH_9.6' }) },
+    { gap: 5, ev: ssh('auth.attempt', { username: 'admin', password_clear: 'admin', outcome: 'success' }) },
+    { gap: 7, ev: ssh('command.exec', { username: 'admin', command: 'cowsay deployment window', outcome: 'success' }) },
+    { gap: 9, ev: ssh('command.exec', { username: 'admin', command: './inventory-probe --format compact', outcome: 'success' }) },
+  ],
   // Mirrors attacker-demo/attacker-api/scenarios/web-exploit.json: a nikto-style sweep
   // carrying four exploit families — XSS, command injection, traversal and SQLi. R05
   // detects each (+10) but is capped at 20 (RULE_POINT_CAPS.R05), so two families show

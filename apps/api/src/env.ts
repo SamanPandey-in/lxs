@@ -49,7 +49,7 @@ const EnvSchema = z.object({
   LLM_API_KEY: z.string().optional(),
   LLM_MODEL: z.string().optional(),
   LLM_BASE_URL: z.string().optional(),
-  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(20_000),
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
   // Provider calls per project per UTC day; past it, incidents get the template.
   LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(200),
   LLM_DEBOUNCE_SECONDS: z.coerce.number().int().nonnegative().default(15),

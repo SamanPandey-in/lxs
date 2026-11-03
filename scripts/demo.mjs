@@ -16,13 +16,14 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const EXAMPLE = join(ROOT, 'examples/acme-shop');
 const PLATFORM_COMPOSE = join(ROOT, 'infra/platform/docker-compose.platform.yml');
-const API = process.env.API_URL ?? 'http://localhost:8080';
+let API = process.env.API_URL ?? 'http://localhost:8081';
 const DEV_KEY = 'ds_dev_0000000000000000000000000000000000000000';
 // attacker-api now requires a control token on /run, /http, /ssh and /reset.
 // Both processes must get the same value or every scenario click 401s while
@@ -59,6 +60,77 @@ function run(bin, args, opts = {}) {
     encoding: 'utf8',
     ...opts,
   });
+}
+
+function parsePids(output = '') {
+  return output
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(Number)
+    .filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+}
+
+function canListen(port) {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', () => resolve(false));
+    server.listen({ port, host: '0.0.0.0', exclusive: true }, () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function prepareApiPort() {
+  if (await httpOk(`${API}/healthz`)) return Number(new URL(API).port || 8081);
+  const current = new URL(API);
+  const requested = Number(current.port || 8081);
+  if (await canListen(requested)) return requested;
+  if (process.env.API_URL) throw new Error(`API_URL port ${requested} is occupied and the API is not healthy`);
+  for (let port = requested + 1; port <= requested + 20; port++) {
+    if (await canListen(port)) {
+      current.port = String(port);
+      API = current.origin;
+      note(`port ${requested} is occupied; using API port ${port}`);
+      return port;
+    }
+  }
+  throw new Error(`No free API port found between ${requested} and ${requested + 20}`);
+}
+
+function clearStalePort(port) {
+  const pids = [];
+
+  if (WIN) {
+    const out = run(
+      'powershell',
+      [
+        '-NoProfile',
+        '-Command',
+        `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`,
+      ],
+      // Keep PowerShell's `|` inside its own command instead of letting cmd.exe consume it.
+      { quiet: true, shell: false },
+    );
+    pids.push(...parsePids(out.stdout));
+  } else {
+    const hasLsof = run('lsof', ['-ti', `tcp:${port}`], { quiet: true });
+    if (hasLsof.stdout) {
+      pids.push(...parsePids(hasLsof.stdout));
+    } else {
+      const hasFuser = run('fuser', [`${port}/tcp`], { quiet: true });
+      pids.push(...parsePids(hasFuser.stdout));
+    }
+  }
+
+  if (!pids.length) return false;
+
+  note(`releasing port ${port} from stale process${pids.length > 1 ? 'es' : ''}: ${pids.join(', ')}`);
+  for (const pid of [...new Set(pids)]) {
+    if (WIN) run('taskkill', ['/PID', String(pid), '/F'], { quiet: true });
+    else run('kill', ['-9', String(pid)], { quiet: true });
+  }
+  return true;
 }
 
 function detach(name, bin, args, cwd, env) {
@@ -131,7 +203,8 @@ function configureAgentEnv() {
   const existingKey = valueOf('LXS_INGEST_KEY');
   const key = existingKey || DEV_KEY;
   set('LXS_INGEST_KEY', key);
-  set('LXS_ENDPOINT', process.env.LXS_ENDPOINT ?? 'http://host.docker.internal:8080', true);
+  const apiPort = new URL(API).port || '8081';
+  set('LXS_ENDPOINT', process.env.LXS_ENDPOINT ?? `http://host.docker.internal:${apiPort}`, true);
   writeFileSync(envFile, `${lines.filter((line, i) => line || i < lines.length - 1).join('\n')}\n`);
   return { key, isCustomKey: key !== DEV_KEY };
 }
@@ -213,6 +286,13 @@ async function up() {
   }
   run(pnpm, ['--filter', '@lxs/api', 'db:migrate'], { cwd: ROOT });
   run(pnpm, ['--filter', '@lxs/api', 'db:seed'], { cwd: ROOT });
+  let apiPort;
+  try {
+    apiPort = await prepareApiPort();
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
   const agentConfig = configureAgentEnv();
   if (agentConfig.isCustomKey) {
     note('preserving the configured ingest key; the API assigns its events to that key’s project');
@@ -220,7 +300,7 @@ async function up() {
 
   step('Starting the platform API');
   if (!(await httpOk(`${API}/healthz`))) {
-    detach('api', pnpm, ['--filter', '@lxs/api', 'dev'], ROOT);
+    detach('api', pnpm, ['--filter', '@lxs/api', 'dev'], ROOT, { PORT: String(apiPort) });
   }
   if (!(await waitFor(`API ready at ${API}`, () => httpOk(`${API}/readyz`), 60))) process.exit(1);
 
@@ -295,6 +375,12 @@ async function sensors(projectId, customKey = false) {
       }
     }
     ok('sensor images built');
+  }
+
+  step('Building the LXS CLI from the workspace sources');
+  if (run(pnpm, ['--filter', 'lxs', 'build'], { cwd: ROOT }).status !== 0) {
+    fail('LXS CLI build failed');
+    return false;
   }
 
   step('Generating the decoy stack from decoy.config.ts');
@@ -471,7 +557,7 @@ async function status() {
           }).stdout ?? ''
         ).trim().length > 0,
     ],
-    ['Platform API       :8080', () => httpOk(`${API}/readyz`)],
+    [`Platform API       :${new URL(API).port || 8081}`, () => httpOk(`${API}/readyz`)],
     ['SOC dashboard      :3000', () => httpOk('http://localhost:3000')],
     ['Shop app + decoys  :3001', () => httpOk('http://localhost:3001')],
     ['Attacker API       :6060', () => httpOk('http://localhost:6060/health')],
@@ -503,6 +589,8 @@ function down() {
   });
   step('Stopping Postgres');
   run('docker', ['compose', '-f', PLATFORM_COMPOSE, 'down']);
+  const ports = [Number(new URL(API).port || 8081), 3000, 3001, 3002, 6060];
+  for (const port of ports) clearStalePort(port);
   note(
     'The API, dashboard and attacker console were started detached — close their windows or kill those node processes.',
   );

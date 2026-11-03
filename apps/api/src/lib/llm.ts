@@ -6,9 +6,11 @@ import Anthropic from '@anthropic-ai/sdk';
  */
 
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+export const DEFAULT_GOOGLE_MODEL = 'gemini-3.8-flash';
+const GOOGLE_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 export interface LlmConfig {
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'google';
   apiKey: string;
   model: string;
   baseUrl?: string;
@@ -57,6 +59,14 @@ export function llmConfigFrom(env: {
   const model = env.LLM_MODEL?.trim();
   if (provider === 'anthropic')
     return { provider, apiKey, model: model || DEFAULT_ANTHROPIC_MODEL, baseUrl, timeoutMs };
+  if (provider === 'google')
+    return {
+      provider,
+      apiKey,
+      model: model || DEFAULT_GOOGLE_MODEL,
+      baseUrl: baseUrl || GOOGLE_API_BASE_URL,
+      timeoutMs,
+    };
   // An OpenAI-compatible endpoint serves whatever it serves, so there is no sane default model.
   if (provider === 'openai' && model) return { provider, apiKey, model, baseUrl, timeoutMs };
   return null;
@@ -105,7 +115,7 @@ function anthropicProvider(cfg: LlmConfig): LlmProvider {
 function openAiProvider(cfg: LlmConfig): LlmProvider {
   const base = (cfg.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
   return {
-    name: 'openai',
+    name: cfg.provider,
     model: cfg.model,
     async complete(req) {
       let res: Response;
@@ -143,5 +153,63 @@ function openAiProvider(cfg: LlmConfig): LlmProvider {
   };
 }
 
+function googleProvider(cfg: LlmConfig): LlmProvider {
+  const base = (cfg.baseUrl ?? GOOGLE_API_BASE_URL).replace(/\/+$/, '');
+  return {
+    name: 'google',
+    model: cfg.model,
+    async complete(req) {
+      let res: Response;
+      let body: {
+        model?: string;
+        status?: string;
+        output_text?: string;
+        output?: { type?: string; text?: string }[];
+        steps?: { type?: string; content?: { type?: string; text?: string }[] }[];
+      };
+      try {
+        res = await fetch(`${base}/interactions`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(cfg.timeoutMs),
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': cfg.apiKey },
+          body: JSON.stringify({
+            model: cfg.model,
+            input: req.user,
+            system_instruction: req.system,
+            generation_config: { thinking_level: 'low', max_output_tokens: 1200 },
+            response_format: {
+              type: 'text',
+              mime_type: 'application/json',
+              schema: req.schema,
+            },
+          }),
+        });
+        body = (await res.json()) as typeof body;
+      } catch (err) {
+        throw new LlmError(err instanceof Error ? err.message : String(err));
+      }
+      if (!res.ok) throw new LlmError(`Provider answered HTTP ${res.status}`);
+      if (body.status && body.status !== 'completed')
+        throw new LlmError(`Model interaction ended with status: ${body.status}`);
+      const text =
+        body.output_text ??
+        body.steps
+          ?.filter((step) => step.type === 'model_output')
+          .flatMap((step) =>
+            (step.content ?? []).flatMap((part) => (part.type === 'text' ? [part.text ?? ''] : [])),
+          )
+          .join('') ??
+        body.output?.flatMap((part) => (part.type === 'text' ? [part.text ?? ''] : [])).join('') ??
+        '';
+      if (!text) throw new LlmError('Provider returned no text output');
+      return { text, model: body.model ?? cfg.model };
+    },
+  };
+}
+
 export const createLlmProvider = (cfg: LlmConfig): LlmProvider =>
-  cfg.provider === 'anthropic' ? anthropicProvider(cfg) : openAiProvider(cfg);
+  cfg.provider === 'anthropic'
+    ? anthropicProvider(cfg)
+    : cfg.provider === 'google'
+      ? googleProvider(cfg)
+      : openAiProvider(cfg);

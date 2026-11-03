@@ -6,9 +6,10 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { exploitTypes } from '@lxs/detection';
+import { evaluateChain, exploitTypes, tagEvent } from '@lxs/detection';
 import { DecoyEvent } from '@lxs/schema';
 import { buildReplayEvents, resolveScenario } from '../src/modules/demo.ts';
+import { computeUncovered, needsAssessment } from '../src/worker/uncovered.ts';
 
 /** Ids the dashboard button and the attacker console's safe mode actually send. */
 const CLIENT_IDS = [
@@ -22,6 +23,7 @@ const CLIENT_IDS = [
   'web-bruteforce',
   'web-exploit',
   'exfil-cleanup',
+  'dynamic',
 ];
 
 describe('resolveScenario', () => {
@@ -152,5 +154,28 @@ describe('scenario fidelity', () => {
     const cmds = events.filter((e) => e.event_type === 'command.exec').map((e) => e.command ?? '');
     assert.ok(cmds.some((c) => /^curl\b/.test(c)), 'no curl transfer command for R09');
     assert.ok(cmds.some((c) => /history\s+-c|bash_history/.test(c)), 'no history/log clearing for R17');
+  });
+
+  it('dynamic keeps its post-login commands outside the deterministic rule mappings', () => {
+    const events = buildReplayEvents('dynamic', '203.0.113.7').map((e) => DecoyEvent.parse(e));
+    const ctx = { now: new Date(), commonCredentials: new Set(['admin', 'admin/admin']), criticalAssets: [] };
+    const commands = events.filter((e) => e.event_type === 'command.exec');
+    assert.equal(commands.length, 2);
+    for (const command of commands) {
+      const tag = tagEvent(command, ctx);
+      assert.ok(tag.ruleHints.includes('R07'));
+      assert.ok(tag.techniques.some((t) => t.id === 'T1059.004'));
+    }
+    const login = events.find((e) => e.event_type === 'auth.attempt' && e.outcome === 'success')!;
+    const verdict = evaluateChain(events, ctx);
+    assert.ok(tagEvent(login, ctx).ruleHints.includes('R06'));
+    assert.notEqual(verdict.label, 'noise');
+    assert.notEqual(verdict.severity, 'critical');
+    const uncovered = computeUncovered(
+      events.map((event) => ({ event, tag: tagEvent(event, ctx) })),
+      verdict.detections.flatMap((d) => d.evidence_event_ids),
+    );
+    assert.deepEqual(uncovered.map((e) => e.command).filter(Boolean), ['cowsay deployment window', './inventory-probe --format compact']);
+    assert.equal(needsAssessment({ aiEnabled: true, label: verdict.label, uncovered, events }), true);
   });
 });

@@ -286,6 +286,7 @@ export const api = {
   },
   incidentEvents: async (iid) =>
     list(await call(`/v1/incidents/${e(iid)}/events`, undefined, () => mock.incidentEvents(iid))),
+  narrateIncident: (iid) => mutate(`/v1/incidents/${e(iid)}/narrate`, "POST"),
   patchIncident: (iid, body) => mutate(`/v1/incidents/${e(iid)}`, "PATCH", body),
   bulkResolveNoise: async (ids) => {
     const results = await Promise.allSettled(

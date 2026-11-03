@@ -36,7 +36,7 @@ export const incidentSummaryCols = {
   ...summaryCols,
   aiHeadline: sql<
     string | null
-  >`(select s.output->>'headline' from ${aiSummaries} s where s.incident_id = ${incidents.id} order by s.created_at desc limit 1)`.as(
+  >`(select s.output->>'headline' from ${aiSummaries} s where s.incident_id = ${incidents.id} and coalesce(s.output->>'assessment', 'false') <> 'true' order by s.created_at desc limit 1)`.as(
     'ai_headline',
   ),
 };

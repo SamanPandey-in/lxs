@@ -24,7 +24,7 @@
     "demo": "node scripts/demo.mjs up",
     "demo:status": "node scripts/demo.mjs status",
     "demo:down": "node scripts/demo.mjs down",
-    "demo:simulate": "pnpm --filter @lxs/simulator exec tsx src/main.ts --url http://localhost:8080 --key ds_dev_0000000000000000000000000000000000000000 --scenario"
+    "demo:simulate": "pnpm --filter @lxs/simulator exec tsx src/main.ts --url http://localhost:8081 --key ds_dev_0000000000000000000000000000000000000000 --scenario"
   },
   "devDependencies": {
     "@biomejs/biome": "2.3.14",

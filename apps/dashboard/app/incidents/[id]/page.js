@@ -426,11 +426,15 @@ function AiBand({
   onResolve,
   onFalsePositive,
   onExport,
+  onNarrate,
+  narrating,
   busy,
 }) {
   const ai = inc.ai_summary;
+  const assessment = inc.ai_assessment;
   const pending = !ai && (inc.ai_status === "pending" || !inc.ai_status);
-  const failed = !ai && inc.ai_status === "failed";
+  const generatingAssessment = inc.ai_status === "generating" && !assessment;
+  const failed = !ai && ["failed", "error"].includes(inc.ai_status);
   const isOpen = inc.status === "open";
   const closed = inc.status === "resolved" || inc.status === "false_positive";
   return (
@@ -440,6 +444,32 @@ function AiBand({
         data-tone={inc.severity === "critical" ? "bad" : undefined}
         style={{ border: 0, padding: 0, background: "none" }}
       >
+        {assessment ? (
+          <div className="reason-box" style={{ marginBottom: 16 }}>
+            <div className="row" style={{ marginBottom: 8, gap: 10 }}>
+              <span className="ai-label"><Sparkles size={13} /> AI-flagged novel behaviour</span>
+              <Pill tone="brand">Advisory</Pill>
+              <SeverityPill severity={assessment.suggested_severity} />
+              <span className="dim" style={{ fontSize: 12 }}>
+                Suggested {assessment.suggested_label} · {Math.round(assessment.confidence * 100)}% confidence · deterministic score unchanged
+              </span>
+            </div>
+            <p style={{ fontWeight: 650 }}>{assessment.novel_behaviour}</p>
+            <p className="dim">{assessment.rationale}</p>
+            {assessment.suggested_techniques.length ? (
+              <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
+                {assessment.suggested_techniques.map((t) => <Chip key={t}>{t}</Chip>)}
+              </div>
+            ) : null}
+            {assessment.recommended_actions.length ? (
+              <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
+                {assessment.recommended_actions.map((a) => <Chip key={a}>{a.replaceAll("_", " ")}</Chip>)}
+              </div>
+            ) : null}
+          </div>
+        ) : generatingAssessment ? (
+          <p className="dim" style={{ marginBottom: 12 }}>AI is assessing uncovered activity. Its result is advisory and cannot change the rule score or trigger containment.</p>
+        ) : null}
         <div className="row" style={{ marginBottom: 8, gap: 10 }}>
           <span className="ai-label">
             <Sparkles size={13} /> AI summary
@@ -462,9 +492,17 @@ function AiBand({
           ) : (
             <Pill tone="halted">Unavailable</Pill>
           )}
+          {generatingAssessment ? <Pill tone="drift" icon={Loader2}>Assessing novel activity</Pill> : null}
+          {inc.ai_status === "error" ? <Pill tone="halted">Advisory assessment unavailable</Pill> : null}
           <span className="dim" style={{ fontSize: 12 }}>
             Narrates the ledger, never changes the score.
           </span>
+          {(ai?.is_fallback || failed) && onNarrate ? (
+            <button type="button" className="btn btn-sm" disabled={busy || narrating} onClick={onNarrate}>
+              {narrating ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+              {narrating ? "Generating…" : "Try AI summary again"}
+            </button>
+          ) : null}
         </div>
         {ai ? (
           <div className="grid-2" style={{ gap: 18 }}>
@@ -660,6 +698,7 @@ export default function IncidentDetailPage() {
   const [blockOpen, setBlockOpen] = useState(false);
   const [unblockOpen, setUnblockOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [narrating, setNarrating] = useState(false);
 
   const { data, error, loading, reload } = usePolling(
     async () => {
@@ -906,6 +945,19 @@ export default function IncidentDetailPage() {
           )
         }
         onExport={doExport}
+        narrating={narrating}
+        onNarrate={async () => {
+          setNarrating(true);
+          try {
+            await api.narrateIncident(inc.id);
+            toast("AI summary queued", "success", "The incident page will update when narration finishes.");
+            setTimeout(reload, 2500);
+          } catch (e) {
+            toast("Could not generate AI summary", "error", e.message);
+          } finally {
+            setNarrating(false);
+          }
+        }}
       />
 
       <div className="hero-split">

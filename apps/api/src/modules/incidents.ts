@@ -13,10 +13,11 @@ import {
   responseActions,
 } from '../db/schema.js';
 import { audit } from '../lib/audit.js';
-import { notFound } from '../lib/errors.js';
+import { conflict, notFound, unavailable } from '../lib/errors.js';
 import { publish } from '../lib/notify.js';
 import { decodeOffset, LimitQuery, pageOf } from '../lib/pagination.js';
 import { parse } from '../lib/parse.js';
+import { enqueueNarrate } from '../jobs/queue.js';
 import {
   compactIncident,
   type IncidentRow,
@@ -25,6 +26,7 @@ import {
   toIncidentSummary,
 } from '../lib/serialize.js';
 import { isUuid, projectAccess, type Role, requireSession } from '../plugins/auth-session.js';
+import { llmConfig } from '../worker/narrator.js';
 import { queryEvents } from './events.js';
 
 const sevRank = dsql`case ${incidents.severity} when 'critical' then 4 when 'high' then 3 when 'medium' then 2 else 1 end`;
@@ -110,7 +112,7 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
     auth,
     async (req): Promise<IncidentDetail & Record<string, unknown>> => {
       const { incident: r, project } = await loadIncident(req, (req.params as { iid: string }).iid);
-      const [dets, ai, [att], notes, actions, blocked] = await Promise.all([
+      const [dets, summaries, assessments, [att], notes, actions, blocked] = await Promise.all([
         db
           .select()
           .from(detections)
@@ -119,7 +121,13 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         db
           .select()
           .from(aiSummaries)
-          .where(eq(aiSummaries.incidentId, r.id))
+          .where(and(eq(aiSummaries.incidentId, r.id), dsql`coalesce(${aiSummaries.output}->>'assessment', 'false') <> 'true'`))
+          .orderBy(desc(aiSummaries.createdAt))
+          .limit(1),
+        db
+          .select()
+          .from(aiSummaries)
+          .where(and(eq(aiSummaries.incidentId, r.id), dsql`${aiSummaries.output}->>'assessment' = 'true'`))
           .orderBy(desc(aiSummaries.createdAt))
           .limit(1),
         db.select().from(attackers).where(eq(attackers.id, r.attackerId)).limit(1),
@@ -150,7 +158,8 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         for (const t of d.techniques as { id: string }[])
           if (!techDetails.has(t.id)) techDetails.set(t.id, t);
 
-      const out = (ai[0]?.output ?? null) as IncidentDetail['ai_summary'];
+      const out = (summaries[0]?.output ?? null) as IncidentDetail['ai_summary'];
+      const assessment = (assessments[0]?.output ?? null) as IncidentDetail['ai_assessment'];
       return {
         ...toIncidentSummary(r),
         attacker_id: r.attackerId,
@@ -164,6 +173,8 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
           evidence_event_ids: d.evidenceEventIds,
         })),
         ai_summary: out,
+        ai_assessment: assessment,
+        ai_kind: assessment ? 'assessment' : summaries[0] ? summaries[0].isFallback ? 'template' : 'summary' : null,
         // extras for the UI
         floor: r.floor,
         opened_at: iso(r.openedAt),
@@ -196,6 +207,25 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
       };
     },
   );
+
+  // Explicit retry path for analysts when the automatic narration was unavailable or
+  // they want a fresh summary after reviewing an incident. The worker still owns the
+  // provider call, so this request never waits on the LLM.
+  app.post('/v1/incidents/:iid/narrate', auth, async (req, reply) => {
+    const { incident, project } = await loadIncident(
+      req,
+      (req.params as { iid: string }).iid,
+      'analyst',
+    );
+    if (!project.aiEnabled) {
+      throw conflict('AI narration is disabled for this project');
+    }
+    if (!llmConfig) {
+      throw unavailable('LLM provider is not configured');
+    }
+    await enqueueNarrate(incident.id);
+    return reply.status(202).send({ id: incident.id, status: 'queued' });
+  });
 
   app.patch('/v1/incidents/:iid', auth, async (req) => {
     const {

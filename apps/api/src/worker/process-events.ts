@@ -2,7 +2,7 @@ import type { DecoyEvent, Detection } from '@lxs/schema';
 import { and, asc, sql as dsql, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { db, type Tx } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
-import { enqueueNarrate, type ProcessEventsJob } from '../jobs/queue.js';
+import { enqueueAssessIncident, enqueueNarrate, type ProcessEventsJob } from '../jobs/queue.js';
 import { sha256hex } from '../lib/crypto.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
@@ -14,6 +14,7 @@ import {
 } from './detection.js';
 import { buildTemplateSummary } from './narrative.js';
 import { llmConfig } from './narrator.js';
+import { computeUncovered, needsAssessment } from './uncovered.js';
 
 const INACTIVITY_MS = 24 * 3600 * 1000;
 const MAX_PER_RUN = 5000;
@@ -93,10 +94,11 @@ export async function processEvents(
   let firstError: unknown;
   for (const g of groups.values()) {
     try {
-      const { count, incidentId } = await processGroup(g.projectId, g.srcIp, g.ids);
+      const { count, incidentId, assess } = await processGroup(g.projectId, g.srcIp, g.ids);
       processed += count;
       // After commit, so a slow narrator can never hold up or roll back a verdict.
       if (incidentId && llmConfig) await enqueueNarrate(incidentId);
+      if (incidentId && assess && llmConfig) await enqueueAssessIncident(incidentId);
     } catch (err) {
       firstError ??= err;
       console.error('[process-events] group failed', g.projectId, g.srcIp, err);
@@ -110,7 +112,7 @@ async function processGroup(
   projectId: string,
   srcIp: string,
   ids: string[],
-): Promise<{ count: number; incidentId: string | null }> {
+): Promise<{ count: number; incidentId: string | null; assess?: boolean }> {
   const det = await loadDetection();
   const entityKey = `ip:${srcIp}`;
 
@@ -380,10 +382,18 @@ async function processGroup(
       floor: d.floor as Detection['floor'],
       evidence_event_ids: d.evidenceEventIds,
     }));
-    const verdict = det.evaluateChain(chainRows.map(toDecoyEvent), {
+    const chainEvents = chainRows.map(toDecoyEvent);
+    const verdict = det.evaluateChain(chainEvents, {
       ...baseCtx,
       existingDetections: existing,
     });
+
+    const [projectConfig] = await tx.select({ aiEnabled: projects.aiEnabled }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const uncovered = computeUncovered(
+      chainEvents.map((event) => ({ event, tag: det.tagEvent(event, baseCtx) })),
+      verdict.detections.flatMap((d) => d.evidence_event_ids),
+    );
+    const assess = !!llmConfig && needsAssessment({ aiEnabled: projectConfig?.aiEnabled ?? false, label: verdict.label, uncovered, events: chainEvents });
 
     // Replace detections.
     await tx.delete(detections).where(eq(detections.incidentId, incidentId));
@@ -430,7 +440,7 @@ async function processGroup(
         eventCount,
         firstEventAt: first,
         lastEventAt: last,
-        aiStatus: hasAiSummary ? 'ready' : 'fallback',
+        aiStatus: assess ? 'generating' : hasAiSummary ? 'ready' : 'fallback',
         updatedAt: dsql`now()`,
       })
       .where(eq(incidents.id, incidentId));
@@ -509,9 +519,9 @@ async function processGroup(
         simulated: t.row.simulated,
       })),
     });
-    await notify('incident.ai', { id: incidentId, status: hasAiSummary ? 'ready' : 'fallback' });
+    await notify('incident.ai', { id: incidentId, status: assess ? 'generating' : hasAiSummary ? 'ready' : 'fallback' });
 
-    return { count: rows.length, incidentId };
+    return { count: rows.length, incidentId, assess };
   });
 }
 

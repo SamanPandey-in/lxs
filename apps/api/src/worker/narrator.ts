@@ -21,7 +21,7 @@ import {
 const MAX_EVENTS = 2000;
 
 export const llmConfig: LlmConfig | null = llmConfigFrom(env);
-const provider: LlmProvider | null = llmConfig ? createLlmProvider(llmConfig) : null;
+export const llmProvider: LlmProvider | null = llmConfig ? createLlmProvider(llmConfig) : null;
 
 export type NarrateOutcome = 'skipped' | 'cached' | 'generated' | 'capped' | 'failed';
 
@@ -31,7 +31,7 @@ export type NarrateOutcome = 'skipped' | 'cached' | 'generated' | 'capped' | 'fa
  * a template row, not a thrown error: only a database problem should make the queue retry.
  */
 export async function narrateIncident(incidentId: string): Promise<NarrateOutcome> {
-  if (!provider) return 'skipped';
+  if (!llmProvider) return 'skipped';
 
   const [row] = await db
     .select({
@@ -133,7 +133,7 @@ export async function narrateIncident(incidentId: string): Promise<NarrateOutcom
     return 'capped';
   }
 
-  const llm = provider;
+  const llm = llmProvider;
   const started = Date.now();
   try {
     const reply = await llm.complete({
@@ -212,7 +212,9 @@ async function saveSummary(
         },
       });
     const status = ready ? 'ready' : 'fallback';
-    await tx.update(incidents).set({ aiStatus: status }).where(eq(incidents.id, incidentId));
+    await tx.update(incidents).set({
+      aiStatus: dsql`case when ${incidents.aiStatus} = 'generating' then 'generating' else ${status} end`,
+    }).where(eq(incidents.id, incidentId));
     const [row] = (await tx
       .select(incidentSummaryCols)
       .from(incidents)
@@ -223,6 +225,6 @@ async function saveSummary(
         dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, type, data)})`,
       );
     if (row) await notify('incident.updated', compactIncident(row));
-    await notify('incident.ai', { id: incidentId, status });
+    await notify('incident.ai', { id: incidentId, status: row?.aiStatus ?? status });
   });
 }

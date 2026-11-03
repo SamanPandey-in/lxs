@@ -56,7 +56,7 @@ export const IncidentSummary = z.object({
   event_count: z.number().int(),
   first_event_at: z.string().datetime(),
   last_event_at: z.string().datetime(),
-  ai_status: z.enum(['pending', 'ready', 'fallback', 'failed']).default('pending'),
+  ai_status: z.enum(['pending', 'generating', 'ready', 'fallback', 'failed', 'error']).default('pending'),
   ai_headline: z.string().nullable().optional(),
 });
 export type IncidentSummary = z.infer<typeof IncidentSummary>;
@@ -70,9 +70,22 @@ export const AiSummary = z.object({
 });
 export type AiSummary = z.infer<typeof AiSummary>;
 
+export const AiAssessment = z.object({
+  suggested_severity: z.enum(['low', 'medium', 'high']),
+  suggested_label: z.enum(['noise', 'opportunistic', 'targeted']),
+  confidence: z.number().min(0).max(1),
+  novel_behaviour: z.string().max(600),
+  rationale: z.string().max(800),
+  suggested_techniques: z.array(z.string().regex(/^T\d{4}(\.\d{3})?$/)).max(6),
+  recommended_actions: z.array(z.enum(['block_ip', 'export_iocs', 'review_asset_logs', 'rotate_credentials', 'no_action'])).max(4),
+}).strict();
+export type AiAssessment = z.infer<typeof AiAssessment>;
+
 export const IncidentDetail = IncidentSummary.extend({
   detections: z.array(Detection),
   ai_summary: AiSummary.nullable(),
+  ai_assessment: AiAssessment.extend({ assessment: z.literal(true) }).nullable(),
+  ai_kind: z.enum(['template', 'summary', 'assessment']).nullable(),
   attacker_id: z.string(),
 });
 export type IncidentDetail = z.infer<typeof IncidentDetail>;
@@ -148,6 +161,7 @@ export const StreamEventName = z.enum([
   'incident.new',
   'incident.updated',
   'incident.ai',
+  'incident.ai_ready',
   'sensor.status',
   'action.applied',
   'heartbeat',
