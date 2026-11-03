@@ -24,6 +24,10 @@ const EnvSchema = z.object({
     .default('http://localhost:3000,http://localhost:3010,http://localhost:5173'),
   DEV_AUTH_BYPASS: bool,
   INGEST_RATE_PER_MIN: z.coerce.number().int().positive().default(1200),
+  INGEST_PROJECT_EVENTS_PER_MIN: z.coerce.number().int().positive().default(100_000),
+  INGEST_PROJECT_BYTES_PER_MIN: z.coerce.number().int().positive().default(256 * 1024 * 1024),
+  INGEST_SENSOR_EVENTS_PER_MIN: z.coerce.number().int().positive().default(20_000),
+  INGEST_SENSOR_BYTES_PER_MIN: z.coerce.number().int().positive().default(64 * 1024 * 1024),
   API_RATE_PER_MIN: z.coerce.number().int().positive().default(1200),
   MAX_BODY_BYTES: z.coerce
     .number()

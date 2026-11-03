@@ -44,9 +44,14 @@ const honeytokens = {
   ],
 };
 
-function setup() {
+function setup(options: { decoys?: WebDecoysFile; now?: () => number } = {}) {
   const lines: LogLine[] = [];
-  const app = buildServer({ decoys, honeytokens, logger: { write: (l) => lines.push(l) } });
+  const app = buildServer({
+    decoys: options.decoys ?? decoys,
+    honeytokens,
+    logger: { write: (l) => lines.push(l) },
+    ...(options.now ? { now: options.now } : {}),
+  });
   return { app, lines };
 }
 const H = { 'x-ds-client-ip': '203.0.113.66', 'x-ds-request-id': 'req1', 'user-agent': 'curl/8' };
@@ -148,4 +153,93 @@ test('unknown paths get a generic 404', async () => {
   const { app } = setup();
   const r = await app.inject({ method: 'GET', url: '/nope', headers: H });
   assert.equal(r.statusCode, 404);
+});
+
+test('request throttling is per source and decoy, and expires after its window', async () => {
+  let time = 1_000_000;
+  const { app } = setup({ now: () => time });
+  for (let i = 0; i < 120; i++) {
+    const r = await app.inject({ method: 'GET', url: '/.env', headers: H });
+    assert.equal(r.statusCode, 200);
+  }
+  const limited = await app.inject({ method: 'GET', url: '/.env', headers: H });
+  assert.equal(limited.statusCode, 429);
+  assert.equal(limited.headers['retry-after'], '60');
+
+  const otherSource = await app.inject({
+    method: 'GET',
+    url: '/.env',
+    headers: { ...H, 'x-ds-client-ip': '198.51.100.44' },
+  });
+  assert.equal(otherSource.statusCode, 200);
+  const otherDecoy = await app.inject({ method: 'GET', url: '/admin', headers: H });
+  assert.equal(otherDecoy.statusCode, 200);
+  time += 60_000;
+  const afterWindow = await app.inject({ method: 'GET', url: '/.env', headers: H });
+  assert.equal(afterWindow.statusCode, 200);
+  await app.close();
+});
+
+test('login throttling preserves decoy behavior for other sources', async () => {
+  const { app } = setup();
+  const login = (ip: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/admin/login',
+      headers: { ...H, 'x-ds-client-ip': ip, 'content-type': 'application/json' },
+      payload: JSON.stringify({ username: 'wrong', password: 'wrong' }),
+    });
+  for (let i = 0; i < 10; i++) assert.equal((await login('203.0.113.18')).statusCode, 401);
+  assert.equal((await login('203.0.113.18')).statusCode, 429);
+  assert.equal((await login('203.0.113.19')).statusCode, 401);
+  await app.close();
+});
+
+test('state capacity never clears unrelated sessions or acceptAfter progress', async () => {
+  const progressDecoy: WebDecoysFile = {
+    ...decoys,
+    decoys: [
+      {
+        id: 'admin-progress',
+        type: 'web-admin',
+        mount: '/progress',
+        acceptAfter: 2,
+        panel: 'customers',
+      },
+      decoys.decoys[0]!,
+    ],
+  };
+  const { app } = setup({ decoys: progressDecoy });
+  const login = (ip: string, mount = '/progress') =>
+    app.inject({
+      method: 'POST',
+      url: `${mount}/login`,
+      headers: { ...H, 'x-ds-client-ip': ip, 'content-type': 'application/json' },
+      payload: JSON.stringify({ username: 'invalid', password: 'invalid' }),
+    });
+
+  // Keep a live authenticated session while filling the independent attempt/request stores.
+  const authenticated = await app.inject({
+    method: 'POST',
+    url: '/admin/login',
+    headers: { ...H, 'content-type': 'application/json' },
+    payload: JSON.stringify({ username: 'admin', password: 'admin' }),
+  });
+  assert.equal(authenticated.statusCode, 302);
+
+  // Source 0 has one failed attempt; the admin session and other sources fill request state.
+  assert.equal((await login('198.51.100.1')).statusCode, 401);
+  for (let i = 2; i <= 4999; i++) {
+    const ip = `10.${Math.floor(i / 65536)}.${Math.floor((i >> 8) % 256)}.${i % 256}`;
+    const r = await login(ip);
+    assert.equal(r.statusCode, 401, `source ${i} should retain normal decoy behavior`);
+  }
+
+  // Existing per-source state remains usable at capacity: acceptAfter reaches its threshold,
+  // and the already-authenticated session remains valid after the flood.
+  assert.equal((await login('198.51.100.1')).statusCode, 302);
+  const panel = await app.inject({ method: 'GET', url: '/admin/panel', headers: H });
+  assert.equal(panel.statusCode, 200);
+  assert.match(panel.body, /Export customers/);
+  await app.close();
 });

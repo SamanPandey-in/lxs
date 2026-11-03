@@ -14,6 +14,57 @@ export interface ServerDeps {
 const MAX_BODY = 16 * 1024; // BREAKDOWN 7.11
 const SESSION_MS = 30 * 60 * 1000;
 const MAX_TRACKED = 5000;
+const STATE_TTL_MS = 30 * 60 * 1000;
+const REQUEST_WINDOW_MS = 60 * 1000;
+const MAX_REQUESTS_PER_SOURCE = 120;
+const MAX_LOGINS_PER_SOURCE = 10;
+
+/** A bounded TTL map that never evicts live state to make room for an attacker-controlled key. */
+class BoundedTtlMap<V> {
+  private readonly values = new Map<string, { value: V; expiresAt: number }>();
+
+  constructor(
+    private readonly capacity: number,
+    private readonly now: () => number,
+  ) {}
+
+  get(key: string): V | undefined {
+    this.sweep(16);
+    const entry = this.values.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= this.now()) {
+      this.values.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  /** Returns false at capacity instead of clearing or evicting unrelated live state. */
+  set(key: string, value: V, ttlMs: number): boolean {
+    this.sweep(16);
+    const current = this.values.get(key);
+    if (!current && this.values.size >= this.capacity) return false;
+    this.values.set(key, { value, expiresAt: this.now() + ttlMs });
+    return true;
+  }
+
+  delete(key: string): void {
+    this.values.delete(key);
+  }
+
+  private sweep(limit: number): void {
+    const now = this.now();
+    for (let i = 0; i < limit && this.values.size > 0; i++) {
+      const first = this.values.entries().next().value as
+        | [string, { value: V; expiresAt: number }]
+        | undefined;
+      if (!first) return;
+      const [key, entry] = first;
+      this.values.delete(key);
+      if (entry.expiresAt > now) this.values.set(key, entry);
+    }
+  }
+}
 
 /** Never trust the value for anything but logging; fall back to a sentinel the agent drops. */
 export function sanitizeIp(v: unknown): string {
@@ -114,19 +165,16 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return undefined;
   };
 
-  const authed = new Map<string, number>(); // ip -> expiry (sessions are IP-keyed: Cookie never reaches us)
-  const attempts = new Map<string, number>(); // `${decoy}|${ip}` -> failed tries
-  const bound = <V>(m: Map<string, V>): void => {
-    if (m.size > MAX_TRACKED) m.clear();
-  };
-  const isAuthed = (ip: string): boolean => {
-    const exp = authed.get(ip);
-    if (exp === undefined) return false;
-    if (exp < now()) {
-      authed.delete(ip);
-      return false;
-    }
-    return true;
+  const authed = new BoundedTtlMap<true>(MAX_TRACKED, now); // sessions keyed by decoy and trusted client IP
+  const attempts = new BoundedTtlMap<number>(MAX_TRACKED, now);
+  const requests = new BoundedTtlMap<number>(MAX_TRACKED, now);
+  const logins = new BoundedTtlMap<number>(MAX_TRACKED, now);
+  const isAuthed = (decoyId: string, ip: string): boolean =>
+    authed.get(`${decoyId}|${ip}`) === true;
+  const consumeRequest = (decoyId: string, ip: string): boolean => {
+    const key = `${decoyId}|${ip}`;
+    const count = requests.get(key) ?? 0;
+    return count < MAX_REQUESTS_PER_SOURCE && requests.set(key, count + 1, REQUEST_WINDOW_MS);
   };
 
   const send = (
@@ -181,6 +229,17 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       return reply2;
     };
 
+    // Bound request volume by the SDK-derived source IP and decoy. Fastify proxy trust stays off;
+    // the decoy is reachable only through the Unix socket and the SDK replaces this header.
+    if (decoy && !consumeRequest(decoy.id, ip)) {
+      return done(
+        send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
+          'retry-after': '60',
+        }),
+        429,
+      );
+    }
+
     if (!decoy) {
       return done(send(reply, 404, 'text/html; charset=utf-8', tpl.NOT_FOUND), 404);
     }
@@ -214,7 +273,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
             200,
           );
         if (sub === '/panel' || sub === '/export' || sub === '/export.csv') {
-          if (!isAuthed(ip) || decoy.panel === 'none') {
+          if (!isAuthed(decoy.id, ip) || decoy.panel === 'none') {
             return done(
               reply
                 .code(302)
@@ -258,20 +317,47 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       }
 
       if (loginAttempt) {
+        const sourceKey = `${decoy.id}|${ip}`;
+        const loginCount = logins.get(sourceKey) ?? 0;
+        if (
+          loginCount >= MAX_LOGINS_PER_SOURCE ||
+          !logins.set(sourceKey, loginCount + 1, REQUEST_WINDOW_MS)
+        ) {
+          return done(
+            send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
+              'retry-after': '60',
+            }),
+            429,
+          );
+        }
         const username = clip(pick(body, ['username', 'user', 'email', 'login']), 256) ?? '';
         const password = clip(pick(body, ['password', 'pass', 'pwd']), 128) ?? '';
-        const key = `${decoy.id}|${ip}`;
+        const key = sourceKey;
         const tries = (attempts.get(key) ?? 0) + 1;
         const accepted =
           (decoy.acceptCredentials ?? []).some(([u, p]) => u === username && p === password) ||
           (decoy.acceptAfter !== undefined && tries >= decoy.acceptAfter);
         if (accepted) {
+          if (!authed.set(key, true, SESSION_MS)) {
+            return done(
+              send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
+                'retry-after': '60',
+              }),
+              429,
+              { kind: 'login', username, password, accepted: false },
+            );
+          }
           attempts.delete(key);
-          bound(authed);
-          authed.set(ip, now() + SESSION_MS);
         } else {
-          bound(attempts);
-          attempts.set(key, tries);
+          if (!attempts.set(key, tries, STATE_TTL_MS)) {
+            return done(
+              send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
+                'retry-after': '60',
+              }),
+              429,
+              { kind: 'login', username, password, accepted: false },
+            );
+          }
         }
         const extra: Partial<LogLine> = { kind: 'login', username, password, accepted };
         if (accepted && decoy.panel !== 'none') {
@@ -363,14 +449,20 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   // Oversized or malformed requests still produce a log line and a generic response.
   app.setErrorHandler((err: Error & { statusCode?: number }, req, reply) => {
-    const status =
-      err.statusCode && err.statusCode >= 400 && err.statusCode < 500 ? err.statusCode : 400;
     const { path, query } = splitUrl(req.raw.url ?? '/');
+    const decoy = find(path);
+    const ip = sanitizeIp(req.headers['x-ds-client-ip']);
+    const limited = decoy !== undefined && !consumeRequest(decoy.id, ip);
+    const status = limited
+      ? 429
+      : err.statusCode && err.statusCode >= 400 && err.statusCode < 500
+        ? err.statusCode
+        : 400;
     deps.logger.write({
       ts: new Date(now()).toISOString(),
-      decoy_id: find(path)?.id ?? '-',
+      decoy_id: decoy?.id ?? '-',
       kind: 'request',
-      ip: sanitizeIp(req.headers['x-ds-client-ip']),
+      ip,
       method: req.method,
       path: clip(path, 512) ?? '/',
       ...(query ? { query: clip(query, 1024) } : {}),
@@ -382,8 +474,12 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     });
     reply
       .code(status)
-      .headers({ ...SECURITY_HEADERS, 'content-type': 'text/plain; charset=utf-8' })
-      .send(status === 413 ? 'Payload Too Large' : 'Bad Request');
+      .headers({
+        ...SECURITY_HEADERS,
+        'content-type': 'text/plain; charset=utf-8',
+        ...(limited ? { 'retry-after': '60' } : {}),
+      })
+      .send(limited ? 'Too Many Requests' : status === 413 ? 'Payload Too Large' : 'Bad Request');
   });
 
   return app;

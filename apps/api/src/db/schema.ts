@@ -109,6 +109,18 @@ export const apiKeys = pgTable(
   ],
 );
 
+/** Shared fixed-window ingest budgets. Rows are updated transactionally across API replicas. */
+export const ingestUsage = pgTable('ingest_usage', {
+  scopeKey: text('scope_key').primaryKey(),
+  projectId: uuid('project_id')
+    .notNull()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  windowStart: ts('window_start').notNull(),
+  requests: integer('requests').notNull().default(0),
+  events: integer('events').notNull().default(0),
+  bytes: integer('bytes').notNull().default(0),
+});
+
 export const sensors = pgTable(
   'sensors',
   {

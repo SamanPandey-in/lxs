@@ -1,7 +1,8 @@
 # PROGRESS.md — where we are against the original plan
 
-Measured against `BREAKDOWN.md` §11 (the ten phases) and `PERFORMANCE.md` (the five
-performance items). Last updated 2026-10-31.
+Measured against `BREAKDOWN.md` §11 (the ten phases), `PERFORMANCE.md` (the five
+performance items) and `DEMO-RISK-AUDIT.md` (the thirteen pre-demo findings).
+Last updated 2026-10-31, after the four-engineer hardening pass was merged.
 
 Everything marked **Done** below was verified by running it, not by reading the code.
 Where something is partial, the gap is named.
@@ -12,14 +13,26 @@ Where something is partial, the gap is named.
 
 **The product works end to end.** A simulated attack chain goes decoy → agent/ingest →
 detection → one correlated incident → dashboard → one-click block → agent policy, and the
-documented scores reproduce exactly. 109 tests pass, typecheck is clean across 13
-packages, lint passes, and the dashboard builds and serves from production.
+documented scores reproduce exactly. **276 tests pass** — 162 in the pnpm workspace, 111 in
+`apps/dashboard`, 3 in `attacker-demo/attacker-api` — typecheck is clean across all 13
+workspace packages, and the dashboard builds and serves from production.
 
-**The LLM narrator remains unbuilt** (Phase 8). Prototype authentication is now implemented
-for Phase 3b: email/password signup and login, JWT-backed HttpOnly sessions, projects and
+**All 13 findings of the pre-demo risk audit are closed** (`DEMO-RISK-AUDIT.md`), split four
+ways and merged: dashboard honesty, authentication, attacker-console controls, and API
+robustness. See *Demo-risk hardening pass* below.
+
+**The LLM narrator remains unbuilt** (Phase 8). Prototype authentication is implemented for
+Phase 3b: email/password signup and login, JWT-backed HttpOnly sessions, projects and
 project-scoped ingest keys. Email verification is intentionally omitted for the prototype.
-**One thing cannot be proven on this machine:** containment, because the host firewall rules
-are Linux-only.
+
+Two things are **not** green:
+
+- **Containment cannot be proven on this machine** — the host firewall rules are Linux-only.
+- **`pnpm lint` fails** with 231 errors. Every one is a formatting diagnostic (CRLF line
+  endings on a Windows checkout); Biome reports **no rule violations**, and the 51 warnings
+  are pre-existing. Fixing it means reformatting 231 of 234 files, so it was deliberately
+  left alone while four engineers had branches open. Worth doing in one commit now that
+  they are all merged.
 
 ---
 
@@ -39,7 +52,7 @@ are Linux-only.
 | **7** | Correlation, honeytokens, profiles | **Done** |
 | 8 | Response, LLM narrator, notifications | **Partial** — response yes, LLM no |
 | 9 | Containment hardening + selftest | **Partial** — built, unprovable here |
-| 10 | Harden, polish, docs, deploy, rehearse | **Partial** — docs yes, rehearsal no |
+| 10 | Harden, polish, docs, deploy, rehearse | **Partial** — docs and the audit-driven hardening pass yes, rehearsal and deploy no |
 
 ### The critical path, which the plan says gates everything
 
@@ -79,6 +92,55 @@ labelled **Template** on screen, not an LLM.
 | `noise` | **23 · Low · noise** |
 | `opportunistic` | **65 · High · opportunistic** |
 | `honeytoken` | raw 65, floored to **75 · Critical · targeted** |
+| `sqli` | **Medium · noise** — R05 once for SQLi and once for traversal, R03 for the sqlmap UA |
+
+`sqli` and `honeytoken` are now first-class replays in `apps/api/src/modules/demo.ts`
+rather than names that silently fell through to `targeted` (audit #13). `ps-use-case` and
+`ps-attacker` are explicit aliases of `targeted`; anything else is rejected with a 422 that
+lists the accepted names.
+
+---
+
+## Demo-risk hardening pass
+
+`DEMO-RISK-AUDIT.md` ranked 13 code-level defects that could break or discredit the demo.
+`DEMO-RISK-WORKSPLIT.md` divided them four ways by file ownership so the branches could not
+collide. All four are merged to `main` and all 13 are closed.
+
+| Engineer | Scope | Findings | State |
+|---|---|---|---|
+| **A** | Authentication, CSRF, tenant scoping | #6, #7, #9 | **Merged** |
+| **B** | Dashboard honesty (no invented data, truthful containment UI) | #1, #2 | **Merged** |
+| **C** | Attacker console controls and target handling | #3, #4, #5 | **Merged** |
+| **D** | API robustness and demo correctness | #8, #10, #11, #12, #13 | **Merged** |
+
+What each pass actually changed:
+
+- **A — auth.** `DEV_AUTH_BYPASS` defaults to false and is refused unless development binds
+  to loopback; the CSRF check no longer passes on a missing `Origin`; `/v1/system` counts are
+  scoped to organizations the caller owns.
+- **B — dashboard.** Pages no longer substitute mock data for a failed API call, no longer
+  report all-clear or success on failure, and show a red status banner instead. Mock mode is
+  opt-in behind `LXS_ALLOW_MOCK`.
+- **C — attacker console.** `sendHttp` resolves the final URL *before* checking the allowlist,
+  so an absolute `path` can no longer aim the attack box at any host on the network; `/run`,
+  `/http`, `/ssh` and `/reset` require a control token; the service binds to 127.0.0.1 with
+  CORS narrowed to the console origin; `/run` refuses a second concurrent run (409) and
+  threads an `AbortSignal`; SSH session ids are unguessable and not caller-adoptable.
+- **D — API robustness.** CIDR allowlist entries validate the prefix length per family, mask
+  IPv4 host bits and name the offending entry by index; SSE connections are capped (50 per
+  project, 500 total) with dead-socket reaping and self-terminating heartbeats, and
+  `/v1/stream` is no longer exempt from rate limiting; IOC export survives an empty attacker
+  label; gzip ingest enforces a 4× decompression ratio with a bounded in-flight gate that
+  returns **429**, not 503, so the agent backs off instead of treating it as a server fault;
+  replay scenarios resolve by name or fail loudly.
+
+Verified end to end against real Postgres with the worker running: every scenario's verdict
+matched its narration, `honeytoken` reaching Critical through R16's severity floor and `sqli`
+staying Medium/noise. One integration break was found and fixed during the merge — C's new
+control token was required by `attacker-api` but `scripts/demo.mjs` launched both attacker
+processes without it, so `/health` reported healthy while every scenario click 401'd
+(`ATTACKER_API_TOKEN` is now threaded through the launcher).
 
 ---
 
@@ -162,8 +224,46 @@ The worker re-reads an attacker's full history on every ingest call — O(n²) i
 length. Invisible today; will bite with long chains or a busy sensor. Fix is a debounce
 or a pg-boss singleton key per `(project_id, attacker_id)`.
 
-### 7. Smaller things
+### 7. Deception quality — what an attacker who suspects a honeypot would notice
 
+The audit asked "what breaks the demo". A later pass asked the opposite question: given that
+`/.env` and `/admin` are guessable patterns, what does an attacker probing them learn? The
+architecture holds up better than expected — `ds-web` runs `network_mode: none` and is
+reachable only over a unix socket, the SDK strips every client-supplied `x-ds-*` header
+before setting the client IP itself, honeytokens and canary rows are randomly generated per
+build, and the agent collapses >20 failed logins per minute per source into one counted
+event. None of the following is a demo blocker; they are fingerprinting and evasion gaps.
+
+Open:
+
+- **All seven decoy templates share one `CSS` constant and one `page()` helper**, including
+  the 404. A WordPress login and a phpMyAdmin login that render from the same stylesheet are
+  one request away from being identified as the same fake.
+- **`APP_KEY` in the `.env` bait decodes to "This is not a real key at all!!!"**
+  (`apps/decoy-web/src/templates.ts`). `sqlDump` likewise carries a frozen
+  `pg_dump version 14.9` banner.
+- **No second-order assets.** `/wp-includes/`, `/wp-content/` and phpMyAdmin's `/themes/`
+  all 404 identically, and canned responses answer in under a millisecond.
+- **`trustProxy: true` returns the leftmost `X-Forwarded-For` hop**, which the client
+  controls (`sdk/lxs/src/middleware/core.ts`). The CIDR-array form is correct; only the
+  boolean shortcut is wrong. Anyone deploying behind a load balancer will reach for it.
+- **`0.0.0.0/0` is still an accepted allowlist entry**, which silently disables all blocking
+  for the project. `toCidr` handles `bits === 0` rather than rejecting it.
+- **`bound()` clears the entire session/attempt map** at 5000 entries
+  (`apps/decoy-web/src/server.ts`), so a source can reset every counter in the process. LRU
+  eviction is the fix; the agent's flood collapser has the same pattern at 20,000.
+- **Sessions are keyed on client IP**, and `acceptAfter` accepts *any* password on attempt N
+  — both a tell and a way to make captured credential intel worthless.
+- **Honeytokens cannot be attributed to a visitor.** R16 proves a leak happened but not who
+  took it, because the same token value is served to everyone within a deployment.
+- **Detection thresholds are readable in-repo** (R04's five failures in 60 s, the Noise
+  suppression band), so an attacker who reads `packages/detection/src/rules.ts` can aim for
+  a suppressed verdict. Jittering the thresholds per deployment is the mitigation.
+
+### 8. Smaller things
+
+- **`pnpm lint` fails on 231 formatting diagnostics** (CRLF). No rule violations. One
+  `biome check --write` commit closes it, now that no engineer has a branch open.
 - **The PS04 problem-statement PDF is still not in the repo.** Every requirement traced
   here is second-hand via S4's matrix. Worth closing before judging.
 - `CORS_ORIGINS` must be set properly for any real deployment — a host not on the list

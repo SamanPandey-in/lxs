@@ -11,7 +11,7 @@ import { enqueueProcessEvents } from '../jobs/queue.js';
 import { HttpError, invalid } from '../lib/errors.js';
 import { parse } from '../lib/parse.js';
 import { requireIngestKey } from '../plugins/bearer-key.js';
-import { ingestRateLimit } from '../plugins/rate-limit.js';
+import { ingestRateLimit, releaseIngestQuota, reserveIngestQuota } from '../plugins/rate-limit.js';
 
 const gunzipAsync = promisify(gunzip);
 
@@ -44,13 +44,53 @@ export interface IngestResult {
   eventIds: string[];
 }
 
+/** Resolve client-supplied sensor identity only when the authenticated key owns it. */
+export async function resolveIngestSensor(opts: {
+  projectId: string;
+  apiKeyId?: string | null;
+  sensorId?: string | null;
+}): Promise<string | null> {
+  if (opts.sensorId != null) {
+    if (!UUID_RE.test(opts.sensorId))
+      throw new HttpError(404, 'sensor_not_found', 'Unknown sensor_id for this key');
+    const [sensor] = await db
+      .select({ id: sensors.id, projectId: sensors.projectId, apiKeyId: sensors.apiKeyId })
+      .from(sensors)
+      .where(eq(sensors.id, opts.sensorId))
+      .limit(1);
+    if (!sensor || !ingestSensorOwnedBy(sensor, opts.projectId, opts.apiKeyId))
+      throw new HttpError(404, 'sensor_not_found', 'Unknown sensor_id for this key');
+    return sensor.id;
+  }
+  if (!opts.apiKeyId) return null;
+  const [sensor] = await db
+    .select({ id: sensors.id })
+    .from(sensors)
+    .where(and(eq(sensors.projectId, opts.projectId), eq(sensors.apiKeyId, opts.apiKeyId)))
+    .orderBy(desc(sensors.lastSeenAt))
+    .limit(1);
+  return sensor?.id ?? null;
+}
+
+export function ingestSensorOwnedBy(
+  sensor: { projectId: string; apiKeyId: string | null },
+  projectId: string,
+  apiKeyId?: string | null,
+): boolean {
+  return sensor.projectId === projectId && (apiKeyId == null || sensor.apiKeyId === apiKeyId);
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function ingestRetryAfterHeader(seconds: number): string {
+  return String(Math.max(1, Math.ceil(seconds)));
+}
 
 /** Validate, de-duplicate on (project_id, event_uid), store and enqueue. Shared by /v1/ingest and demo replay. */
 export async function ingestEvents(opts: {
   projectId: string;
   apiKeyId?: string | null;
-  sensorId?: string;
+  sensorId?: string | null;
   rawEvents: unknown[];
 }): Promise<IngestResult> {
   const valid: DecoyEvent[] = [];
@@ -74,25 +114,7 @@ export async function ingestEvents(opts: {
     throw invalid('No valid events in batch', rejected.slice(0, 20));
   }
 
-  // Resolve the sensor: explicit id (must belong to the project) or the newest sensor of this key.
-  let sensorId: string | null = null;
-  if (opts.sensorId && UUID_RE.test(opts.sensorId)) {
-    const [s] = await db
-      .select({ id: sensors.id })
-      .from(sensors)
-      .where(and(eq(sensors.id, opts.sensorId), eq(sensors.projectId, opts.projectId)))
-      .limit(1);
-    sensorId = s?.id ?? null;
-  }
-  if (!sensorId && opts.apiKeyId) {
-    const [s] = await db
-      .select({ id: sensors.id })
-      .from(sensors)
-      .where(and(eq(sensors.projectId, opts.projectId), eq(sensors.apiKeyId, opts.apiKeyId)))
-      .orderBy(desc(sensors.lastSeenAt))
-      .limit(1);
-    sensorId = s?.id ?? null;
-  }
+  const sensorId = await resolveIngestSensor(opts);
 
   const keys = [...new Set(valid.map((e) => e.decoy_id).filter((k): k is string => !!k))];
   const decoyMap = new Map<string, string>();
@@ -149,19 +171,25 @@ export async function ingestEvents(opts: {
 
   // De-dup inside the batch too (same id twice in one request).
   const seen = new Set<string>();
-  const unique = rows.filter((r) => (seen.has(r.eventUid) ? false : (seen.add(r.eventUid), true)));
+  const unique = rows.filter((r) => {
+    if (seen.has(r.eventUid)) return false;
+    seen.add(r.eventUid);
+    return true;
+  });
 
   const eventIds: string[] = [];
   try {
-    for (let i = 0; i < unique.length; i += 200) {
-      const chunk = unique.slice(i, i + 200);
-      const inserted = await db
-        .insert(events)
-        .values(chunk)
-        .onConflictDoNothing({ target: [events.projectId, events.eventUid] })
-        .returning({ id: events.id });
-      for (const r of inserted) eventIds.push(r.id);
-    }
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < unique.length; i += 200) {
+        const chunk = unique.slice(i, i + 200);
+        const inserted = await tx
+          .insert(events)
+          .values(chunk)
+          .onConflictDoNothing({ target: [events.projectId, events.eventUid] })
+          .returning({ id: events.id });
+        for (const r of inserted) eventIds.push(r.id);
+      }
+    });
   } catch {
     throw new HttpError(503, 'unavailable', 'Storage unavailable; keep buffering and retry');
   }
@@ -238,12 +266,48 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const auth = req.ingest!;
       const body = parse(Envelope, req.body);
-      const res = await ingestEvents({
+      const sensorId = await resolveIngestSensor({
         projectId: auth.projectId,
         apiKeyId: auth.keyId,
         sensorId: body.sensor_id,
-        rawEvents: body.events,
       });
+      const byteCount = Buffer.byteLength(JSON.stringify(body), 'utf8');
+      const quota = await reserveIngestQuota({
+        projectId: auth.projectId,
+        sensorId,
+        eventCount: body.events.length,
+        byteCount,
+      });
+      if (!quota.allowed) {
+        return reply
+          .header('Retry-After', ingestRetryAfterHeader(quota.retryAfter))
+          .status(429)
+          .send({
+            error: {
+              code: 'ingest_quota_exceeded',
+              message: `Ingest ${quota.scope} event/byte budget exceeded; retry after ${quota.retryAfter} seconds.`,
+            },
+          });
+      }
+      let res: IngestResult;
+      try {
+        res = await ingestEvents({
+          projectId: auth.projectId,
+          apiKeyId: auth.keyId,
+          sensorId,
+          rawEvents: body.events,
+        });
+      } catch (error) {
+        if (error instanceof HttpError && error.status === 503) {
+          await releaseIngestQuota({
+            projectId: auth.projectId,
+            sensorId,
+            eventCount: body.events.length,
+            byteCount,
+          }).catch(() => {});
+        }
+        throw error;
+      }
       return reply
         .status(202)
         .send({ accepted: res.accepted, duplicates: res.duplicates, rejected: res.rejected });

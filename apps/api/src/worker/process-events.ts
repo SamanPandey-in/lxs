@@ -1,5 +1,5 @@
 import type { DecoyEvent, Detection } from '@lxs/schema';
-import { and, asc, sql as dsql, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, sql as dsql, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { db, type Tx } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
 import type { ProcessEventsJob } from '../jobs/queue.js';
@@ -148,6 +148,110 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
     const firstAt = rows[0]!.occurredAt;
     const lastAt = rows[rows.length - 1]!.occurredAt;
 
+    // Do not create an attacker/incident for every source that merely touches a
+    // decoy. Keep those events fully searchable and tagged, then promote their
+    // retained evidence if that source becomes meaningful within the window.
+    const [priorAttacker] = await tx
+      .select({ id: attackers.id })
+      .from(attackers)
+      .where(and(eq(attackers.projectId, projectId), eq(attackers.entityKey, entityKey)))
+      .limit(1);
+    const activeIncident = priorAttacker
+      ? (
+          await tx
+            .select({ id: incidents.id, lastEventAt: incidents.lastEventAt })
+            .from(incidents)
+            .where(
+              and(
+                eq(incidents.projectId, projectId),
+                eq(incidents.attackerId, priorAttacker.id),
+                inArray(incidents.status, ['open', 'acknowledged']),
+              ),
+            )
+            .limit(1)
+        )[0]
+      : undefined;
+    if (
+      activeIncident &&
+      firstAt.getTime() - activeIncident.lastEventAt.getTime() > INACTIVITY_MS
+    ) {
+      await tx
+        .update(incidents)
+        .set({
+          status: 'resolved',
+          resolvedAt: dsql`now()`,
+          resolvedBy: 'system:inactivity',
+          updatedAt: dsql`now()`,
+        })
+        .where(eq(incidents.id, activeIncident.id));
+    }
+    const currentIncident =
+      activeIncident && firstAt.getTime() - activeIncident.lastEventAt.getTime() <= INACTIVITY_MS
+        ? activeIncident
+        : undefined;
+    const priorRows = currentIncident
+      ? []
+      : await tx
+          .select()
+          .from(events)
+          .where(
+            and(
+              eq(events.projectId, projectId),
+              eq(events.srcIp, srcIp),
+              notInArray(events.id, ids),
+              isNull(events.attackerId),
+              isNull(events.incidentId),
+              dsql`${events.processedAt} is not null`,
+              dsql`${events.occurredAt} >= ${new Date(firstAt.getTime() - INACTIVITY_MS).toISOString()}::timestamptz`,
+              dsql`${events.occurredAt} <= ${lastAt.toISOString()}::timestamptz`,
+            ),
+          )
+          .orderBy(dsql`${events.occurredAt} desc`, dsql`${events.id} desc`)
+          .limit(CHAIN_LIMIT);
+    priorRows.reverse();
+    const evidenceRows = [...priorRows, ...rows].slice(-CHAIN_LIMIT);
+    const evidenceEvents = evidenceRows.map(toDecoyEvent);
+
+    if (!currentIncident) {
+      const initialVerdict = det.evaluateChain(evidenceEvents, baseCtx);
+      if (!shouldOpenIndividualIncident(initialVerdict)) {
+        const payload = tagged.map((t) => ({
+          id: t.row.id,
+          tags: [t.tag.category, ...t.tag.ruleHints],
+          techs: t.tag.techniques.map((x) => x.id),
+          stage: t.tag.stage,
+        }));
+        await tx.execute(dsql`
+          update events e set
+            processed_at = now(),
+            tags = ARRAY(select jsonb_array_elements_text(t.tags)),
+            techniques = ARRAY(select jsonb_array_elements_text(t.techs)),
+            stage = t.stage
+          from jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) as t(id uuid, tags jsonb, techs jsonb, stage text)
+          where e.id = t.id
+        `);
+        await tx.execute(
+          dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, 'event.new', {
+            total: rows.length,
+            events: tagged.slice(-50).map((t) => ({
+              id: t.row.id,
+              event_type: t.row.eventType,
+              is_decoy: t.row.isDecoy,
+              src_ip: t.row.srcIp,
+              dst_service: t.row.dstService,
+              decoy_id: t.ev.decoy_id ?? null,
+              outcome: t.row.outcome,
+              occurred_at: t.row.occurredAt.toISOString(),
+              incident_id: null,
+              stage: t.tag.stage,
+              simulated: t.row.simulated,
+            })),
+          })})`,
+        );
+        return rows.length;
+      }
+    }
+
     // Attacker upsert
     const [attacker] = await tx
       .insert(attackers)
@@ -210,6 +314,21 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
     }
     const incidentId = incident.id;
 
+    // A low-signal source can become significant later. Promote its retained
+    // events alongside the triggering batch so the incident timeline and
+    // detection evidence cover the complete bounded correlation window.
+    if (priorRows.length) {
+      await tx
+        .update(events)
+        .set({ attackerId: attacker.id, incidentId })
+        .where(
+          inArray(
+            events.id,
+            priorRows.map((r) => r.id),
+          ),
+        );
+    }
+
     // Attach events (single statement) with their tags.
     const payload = tagged.map((t) => ({
       id: t.row.id,
@@ -258,9 +377,12 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
     await tx.delete(detections).where(eq(detections.incidentId, incidentId));
     const seen = new Set<string>();
     const detRows = verdict.detections
-      .filter((d) =>
-        seen.has(`${d.rule_id}|${d.reason}`) ? false : (seen.add(`${d.rule_id}|${d.reason}`), true),
-      )
+      .filter((d) => {
+        const key = `${d.rule_id}|${d.reason}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .map((d) => ({
         incidentId,
         ruleId: d.rule_id,
@@ -379,6 +501,22 @@ async function processGroup(projectId: string, srcIp: string, ids: string[]): Pr
 
     return rows.length;
   });
+}
+
+/**
+ * Noise-only decoy touches remain events, not incidents. Strong outcomes,
+ * medium-or-higher scoring, and substantive detector rules still get an
+ * individual source incident. R01 alone is the generic decoy-touch signal.
+ */
+export function shouldOpenIndividualIncident(verdict: ChainResult): boolean {
+  return (
+    verdict.realAssetReached ||
+    verdict.honeytokenUsed ||
+    verdict.floor !== null ||
+    verdict.score >= 25 ||
+    verdict.label === 'targeted' ||
+    verdict.detections.some((d) => d.rule_id !== 'R01' && d.points >= 10)
+  );
 }
 
 function makeTitle(ip: string, v: ChainResult): string {
