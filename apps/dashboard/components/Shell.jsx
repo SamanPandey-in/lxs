@@ -205,12 +205,12 @@ function WorkspaceShell({ children, path }) {
           ) : null}
           {st.overview ? (
             <span className="sev-summary" role="group" aria-label="Severity summary">
-              <span>
+              <Link href="/incidents?tab=targeted" title="Open the targeted incident queue">
                 <b style={{ color: "var(--bad)" }}>{crit}</b> critical
-              </span>
-              <span>
+              </Link>
+              <Link href="/incidents?tab=targeted" title="Open the targeted incident queue">
                 <b style={{ color: "var(--drift)" }}>{high}</b> high
-              </span>
+              </Link>
               <span>
                 <b>{noise != null ? noise.toLocaleString("en-US") : "—"}</b> noise suppressed
               </span>

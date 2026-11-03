@@ -1572,6 +1572,8 @@ db.blocklist = [
     status: "applied",
     applied_sensors: 3,
     total_sensors: 3,
+    refused_count: 47,
+    last_refused_at: iso(38),
   },
   {
     id: "blk_3",
@@ -1585,6 +1587,8 @@ db.blocklist = [
     status: "applied",
     applied_sensors: 3,
     total_sensors: 3,
+    refused_count: 1832,
+    last_refused_at: iso(12),
   },
   {
     id: "blk_2",
@@ -1598,6 +1602,8 @@ db.blocklist = [
     status: "applied",
     applied_sensors: 3,
     total_sensors: 3,
+    refused_count: 213,
+    last_refused_at: iso(74),
   },
   {
     id: "blk_1",
@@ -1611,6 +1617,8 @@ db.blocklist = [
     status: "expired",
     applied_sensors: 3,
     total_sensors: 3,
+    refused_count: 9,
+    last_refused_at: iso(172000 - 90000),
   },
 ];
 

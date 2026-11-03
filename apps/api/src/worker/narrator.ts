@@ -31,8 +31,6 @@ export type NarrateOutcome = 'skipped' | 'cached' | 'generated' | 'capped' | 'fa
  * a template row, not a thrown error: only a database problem should make the queue retry.
  */
 export async function narrateIncident(incidentId: string): Promise<NarrateOutcome> {
-  if (!llmProvider) return 'skipped';
-
   const [row] = await db
     .select({
       incident: incidents,
@@ -44,7 +42,11 @@ export async function narrateIncident(incidentId: string): Promise<NarrateOutcom
     .innerJoin(projects, eq(projects.id, incidents.projectId))
     .where(eq(incidents.id, incidentId))
     .limit(1);
-  if (!row?.aiEnabled) return 'skipped';
+  if (!row) return 'skipped';
+  if (!row.aiEnabled || !llmProvider) {
+    await setNarrationStatus(row.incident.projectId, incidentId, 'fallback');
+    return 'skipped';
+  }
   const { incident, ip } = row;
 
   const [dets, evRows] = await Promise.all([
@@ -160,6 +162,22 @@ export async function narrateIncident(incidentId: string): Promise<NarrateOutcom
     });
     return 'failed';
   }
+}
+
+async function setNarrationStatus(
+  projectId: string,
+  incidentId: string,
+  status: 'fallback',
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(incidents)
+      .set({ aiStatus: status, updatedAt: dsql`now()` })
+      .where(eq(incidents.id, incidentId));
+    await tx.execute(
+      dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, 'incident.ai', { id: incidentId, status })})`,
+    );
+  });
 }
 
 /** Calls this UTC day, failures included: a failed call can still be a billed one. */

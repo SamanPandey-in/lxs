@@ -85,7 +85,7 @@ export default function AttackMatrix() {
                           href={`/incidents?technique=${encodeURIComponent(x.id)}`}
                           // One link per heatmap cell: never prefetch these.
                           prefetch={false}
-                          className={`cell${x.count === 0 ? " is-empty" : ""}${heat > 0.45 ? " is-hot" : ""}`}
+                          className={`cell${x.count === 0 ? " is-empty" : ""}${heat > 0.62 ? " is-hot" : ""}`}
                           style={{ "--heat": x.count ? Math.max(0.12, heat) : 0 }}
                           title={`${techTitle(x.id)}\n${x.count} hits`}
                           role="cell"

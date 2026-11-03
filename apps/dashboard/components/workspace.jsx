@@ -125,7 +125,6 @@ export function IncidentsTable({ incidents, emptyHint }) {
           "Incident",
           "Kill chain",
           "ATT&CK",
-          "AI summary",
           "Last activity",
           "Status",
         ]}
@@ -177,7 +176,7 @@ export function IncidentsTable({ incidents, emptyHint }) {
               <KillMini stages={i.stages} severity={i.severity} />
             </td>
             <td>
-              <div className="row" style={{ gap: 4, flexWrap: "wrap", maxWidth: 320 }}>
+              <div className="row incident-techniques">
                 {i.techniques.slice(0, 4).map((t) => (
                   <TechChip key={t} id={t} link={false} />
                 ))}
@@ -186,11 +185,6 @@ export function IncidentsTable({ incidents, emptyHint }) {
                     +{i.techniques.length - 4}
                   </span>
                 ) : null}
-              </div>
-            </td>
-            <td>
-              <div className="cell-clip">
-                {i.ai_headline || (i.ai_status === "pending" ? "AI summary pending…" : "—")}
               </div>
             </td>
             <td style={{ whiteSpace: "nowrap" }}>
@@ -319,7 +313,10 @@ export function AuditTable({ rows, onOpen }) {
             tabIndex={0}
             onClick={() => onOpen(r)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onOpen(r);
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(r);
+              }
             }}
           >
             <td style={{ whiteSpace: "nowrap" }} className="mono">

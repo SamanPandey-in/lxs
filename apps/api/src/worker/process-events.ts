@@ -97,7 +97,9 @@ export async function processEvents(
       const { count, incidentId, assess } = await processGroup(g.projectId, g.srcIp, g.ids);
       processed += count;
       // After commit, so a slow narrator can never hold up or roll back a verdict.
-      if (incidentId && llmConfig) await enqueueNarrate(incidentId);
+      // Queue every new incident even when this API process lacks provider config.
+      // In split API/worker deployments the worker may own the LLM credentials.
+      if (incidentId) await enqueueNarrate(incidentId);
       if (incidentId && assess && llmConfig) await enqueueAssessIncident(incidentId);
     } catch (err) {
       firstError ??= err;
@@ -117,7 +119,8 @@ async function processGroup(
   const entityKey = `ip:${srcIp}`;
 
   return db.transaction(async (tx) => {
-    // Serialise all work for one source so two batches can never open two incidents.
+    // Serialise work for one source so concurrent batches are handled in order;
+    // each qualifying batch below still creates its own incident row.
     await tx.execute(
       dsql`select pg_advisory_xact_lock(hashtextextended(${`${projectId}|${entityKey}`}, 0))`,
     );
@@ -167,25 +170,7 @@ async function processGroup(
       .from(attackers)
       .where(and(eq(attackers.projectId, projectId), eq(attackers.entityKey, entityKey)))
       .limit(1);
-    const activeIncident = priorAttacker
-      ? (
-          await tx
-            .select({ id: incidents.id, lastEventAt: incidents.lastEventAt })
-            .from(incidents)
-            .where(
-              and(
-                eq(incidents.projectId, projectId),
-                eq(incidents.attackerId, priorAttacker.id),
-                inArray(incidents.status, ['open', 'acknowledged']),
-              ),
-            )
-            .limit(1)
-        )[0]
-      : undefined;
-    if (
-      activeIncident &&
-      firstAt.getTime() - activeIncident.lastEventAt.getTime() > INACTIVITY_MS
-    ) {
+    if (priorAttacker) {
       await tx
         .update(incidents)
         .set({
@@ -194,45 +179,45 @@ async function processGroup(
           resolvedBy: 'system:inactivity',
           updatedAt: dsql`now()`,
         })
-        .where(eq(incidents.id, activeIncident.id));
+        .where(
+          and(
+            eq(incidents.projectId, projectId),
+            eq(incidents.attackerId, priorAttacker.id),
+            inArray(incidents.status, ['open', 'acknowledged']),
+            dsql`${incidents.lastEventAt} < ${new Date(firstAt.getTime() - INACTIVITY_MS).toISOString()}::timestamptz`,
+          ),
+        );
     }
-    const currentIncident =
-      activeIncident && firstAt.getTime() - activeIncident.lastEventAt.getTime() <= INACTIVITY_MS
-        ? activeIncident
-        : undefined;
-    const priorRows = currentIncident
-      ? []
-      : await tx
-          .select()
-          .from(events)
-          .where(
-            and(
-              eq(events.projectId, projectId),
-              eq(events.srcIp, srcIp),
-              notInArray(events.id, ids),
-              isNull(events.attackerId),
-              isNull(events.incidentId),
-              dsql`${events.processedAt} is not null`,
-              dsql`${events.occurredAt} >= ${new Date(firstAt.getTime() - INACTIVITY_MS).toISOString()}::timestamptz`,
-              dsql`${events.occurredAt} <= ${lastAt.toISOString()}::timestamptz`,
-            ),
-          )
-          .orderBy(dsql`${events.occurredAt} desc`, dsql`${events.id} desc`)
-          .limit(CHAIN_LIMIT);
+    const priorRows = await tx
+      .select()
+      .from(events)
+      .where(
+        and(
+          eq(events.projectId, projectId),
+          eq(events.srcIp, srcIp),
+          notInArray(events.id, ids),
+          isNull(events.attackerId),
+          isNull(events.incidentId),
+          dsql`${events.processedAt} is not null`,
+          dsql`${events.occurredAt} >= ${new Date(firstAt.getTime() - INACTIVITY_MS).toISOString()}::timestamptz`,
+          dsql`${events.occurredAt} <= ${lastAt.toISOString()}::timestamptz`,
+        ),
+      )
+      .orderBy(dsql`${events.occurredAt} desc`, dsql`${events.id} desc`)
+      .limit(CHAIN_LIMIT);
     priorRows.reverse();
     const evidenceRows = [...priorRows, ...rows].slice(-CHAIN_LIMIT);
     const evidenceEvents = evidenceRows.map(toDecoyEvent);
 
-    if (!currentIncident) {
-      const initialVerdict = det.evaluateChain(evidenceEvents, baseCtx);
-      if (!shouldOpenIndividualIncident(initialVerdict)) {
-        const payload = tagged.map((t) => ({
-          id: t.row.id,
-          tags: [t.tag.category, ...t.tag.ruleHints],
-          techs: t.tag.techniques.map((x) => x.id),
-          stage: t.tag.stage,
-        }));
-        await tx.execute(dsql`
+    const initialVerdict = det.evaluateChain(evidenceEvents, baseCtx);
+    if (!shouldOpenIndividualIncident(initialVerdict)) {
+      const payload = tagged.map((t) => ({
+        id: t.row.id,
+        tags: [t.tag.category, ...t.tag.ruleHints],
+        techs: t.tag.techniques.map((x) => x.id),
+        stage: t.tag.stage,
+      }));
+      await tx.execute(dsql`
           update events e set
             processed_at = now(),
             tags = ARRAY(select jsonb_array_elements_text(t.tags)),
@@ -241,26 +226,25 @@ async function processGroup(
           from jsonb_to_recordset(${JSON.stringify(payload)}::jsonb) as t(id uuid, tags jsonb, techs jsonb, stage text)
           where e.id = t.id
         `);
-        await tx.execute(
-          dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, 'event.new', {
-            total: rows.length,
-            events: tagged.slice(-50).map((t) => ({
-              id: t.row.id,
-              event_type: t.row.eventType,
-              is_decoy: t.row.isDecoy,
-              src_ip: t.row.srcIp,
-              dst_service: t.row.dstService,
-              decoy_id: t.ev.decoy_id ?? null,
-              outcome: t.row.outcome,
-              occurred_at: t.row.occurredAt.toISOString(),
-              incident_id: null,
-              stage: t.tag.stage,
-              simulated: t.row.simulated,
-            })),
-          })})`,
-        );
-        return { count: rows.length, incidentId: null };
-      }
+      await tx.execute(
+        dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, 'event.new', {
+          total: rows.length,
+          events: tagged.slice(-50).map((t) => ({
+            id: t.row.id,
+            event_type: t.row.eventType,
+            is_decoy: t.row.isDecoy,
+            src_ip: t.row.srcIp,
+            dst_service: t.row.dstService,
+            decoy_id: t.ev.decoy_id ?? null,
+            outcome: t.row.outcome,
+            occurred_at: t.row.occurredAt.toISOString(),
+            incident_id: null,
+            stage: t.tag.stage,
+            simulated: t.row.simulated,
+          })),
+        })})`,
+      );
+      return { count: rows.length, incidentId: null };
     }
 
     // Attacker upsert
@@ -277,56 +261,25 @@ async function processGroup(
       .returning();
     if (!attacker) throw new Error('attacker upsert failed');
 
-    // Find or open the incident (one active per attacker; 24 h inactivity starts a new one).
-    let [incident] = await tx
-      .select()
-      .from(incidents)
-      .where(
-        and(
-          eq(incidents.projectId, projectId),
-          eq(incidents.attackerId, attacker.id),
-          inArray(incidents.status, ['open', 'acknowledged']),
-        ),
-      )
-      .limit(1);
-    if (incident && firstAt.getTime() - incident.lastEventAt.getTime() > INACTIVITY_MS) {
-      await tx
-        .update(incidents)
-        .set({
-          status: 'resolved',
-          resolvedAt: dsql`now()`,
-          resolvedBy: 'system:inactivity',
-          updatedAt: dsql`now()`,
-        })
-        .where(eq(incidents.id, incident.id));
-      incident = undefined;
-    }
-    let isNew = false;
-    if (!incident) {
-      const [seq] = await tx
-        .update(projects)
-        .set({ incidentSeq: dsql`${projects.incidentSeq} + 1` })
-        .where(eq(projects.id, projectId))
-        .returning({ n: projects.incidentSeq });
-      const [created] = await tx
-        .insert(incidents)
-        .values({
-          projectId,
-          number: seq!.n,
-          attackerId: attacker.id,
-          title: `Activity from ${srcIp}`,
-          firstEventAt: firstAt,
-          lastEventAt: lastAt,
-          openedAt: new Date(),
-        })
-        .returning();
-      incident = created!;
-      isNew = true;
-    }
+    const [seq] = await tx
+      .update(projects)
+      .set({ incidentSeq: dsql`${projects.incidentSeq} + 1` })
+      .where(eq(projects.id, projectId))
+      .returning({ n: projects.incidentSeq });
+    const [incident] = await tx
+      .insert(incidents)
+      .values({
+        projectId,
+        number: seq!.n,
+        attackerId: attacker.id,
+        title: `Activity from ${srcIp}`,
+        firstEventAt: firstAt,
+        lastEventAt: lastAt,
+        openedAt: new Date(),
+      })
+      .returning();
+    if (!incident) throw new Error('incident insert failed');
     const incidentId = incident.id;
-    // An AI summary stays up while it is refreshed: dropping back to the template on every
-    // batch would flicker during a live attack. The narrator replaces it within one window.
-    const hasAiSummary = incident.aiStatus === 'ready';
 
     // A low-signal source can become significant later. Promote its retained
     // events alongside the triggering batch so the incident timeline and
@@ -440,12 +393,12 @@ async function processGroup(
         eventCount,
         firstEventAt: first,
         lastEventAt: last,
-        aiStatus: assess ? 'generating' : hasAiSummary ? 'ready' : 'fallback',
+        aiStatus: assess ? 'generating' : llmConfig ? 'pending' : 'fallback',
         updatedAt: dsql`now()`,
       })
       .where(eq(incidents.id, incidentId));
 
-    if (!hasAiSummary) await upsertFallbackSummary(tx, incidentId, srcIp, verdict, eventCount);
+    await upsertFallbackSummary(tx, incidentId, srcIp, verdict, eventCount);
 
     // Attacker rollup.
     const cadence = verdict.detections.some((d) => d.rule_id === 'R13')
@@ -502,7 +455,7 @@ async function processGroup(
       tx.execute(
         dsql`select pg_notify(${STREAM_CHANNEL}, ${streamPayload(projectId, type, data)})`,
       );
-    if (row) await notify(isNew ? 'incident.new' : 'incident.updated', compactIncident(row));
+    if (row) await notify('incident.new', compactIncident(row));
     await notify('event.new', {
       total: rows.length,
       events: tagged.slice(-50).map((t) => ({
@@ -519,7 +472,7 @@ async function processGroup(
         simulated: t.row.simulated,
       })),
     });
-    await notify('incident.ai', { id: incidentId, status: assess ? 'generating' : hasAiSummary ? 'ready' : 'fallback' });
+    await notify('incident.ai', { id: incidentId, status: assess ? 'generating' : 'fallback' });
 
     return { count: rows.length, incidentId, assess };
   });

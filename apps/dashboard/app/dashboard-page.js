@@ -10,7 +10,7 @@ import { useNow } from "@/lib/hooks";
 import { eventTone } from "@/lib/labels";
 import { sortBySeverity, storeActions, useStore } from "@/lib/store";
 import { toast } from "@/lib/toast";
-import { clock, fmtNum, relative } from "@/lib/utils";
+import { clock, fmtNum, relative, stamp } from "@/lib/utils";
 
 /**
  * The overview answers one question: is anything happening that needs me right now?
@@ -44,6 +44,7 @@ export default function Overview() {
 
   const crit = open.filter((i) => i.severity === "critical").length;
   const high = open.filter((i) => i.severity === "high").length;
+  const sensorGroups = groupSensors(st.decoys);
 
   const replay = async () => {
     try {
@@ -244,21 +245,39 @@ export default function Overview() {
           </SectionCard>
 
           <SectionCard title="Sensors" flush>
-            {st.decoys.map((d) => (
-              <div className="health-row" key={d.id}>
-                <span
-                  className={`health-dot ${d.status === "online" ? "is-live" : d.status === "offline" ? "is-offline" : "is-pending"}`}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="truncate">{d.name}</div>
-                  <div className="ds-res-meta">
-                    {d.service} · {relative(d.last_heartbeat_at, now)}
-                  </div>
+            {sensorGroups.map((group) => (
+              <details className="sensor-service" key={group.key}>
+                <summary className="sensor-service-summary">
+                  <span className={`health-dot ${healthDot(group.status)}`} />
+                  <span className="sensor-service-copy">
+                    <span className="sensor-service-name">{group.name}</span>
+                    <span className="ds-res-meta">
+                      {group.service} · {group.sensors.length} sensor{group.sensors.length === 1 ? "" : "s"} · latest heartbeat {relative(group.latestHeartbeat, now)}
+                    </span>
+                  </span>
+                  <Pill tone={healthTone(group.status)}>{healthLabel(group.status)}</Pill>
+                  <ChevronDown className="sensor-service-chevron" size={15} aria-hidden />
+                </summary>
+                <div className="sensor-service-details">
+                  {group.sensors.map((d) => (
+                    <div className="sensor-instance" key={d.id}>
+                      <div className="sensor-instance-heading">
+                        <span className={`health-dot ${healthDot(d.status)}`} />
+                        <strong>{d.name}</strong>
+                        <Pill tone={healthTone(d.status)}>{healthLabel(d.status)}</Pill>
+                      </div>
+                      <dl className="sensor-instance-facts">
+                        <div><dt>Sensor ID</dt><dd className="mono">{d.id}</dd></div>
+                        <div><dt>Last heartbeat</dt><dd><RelativeTime iso={d.last_heartbeat_at} />{d.last_heartbeat_at ? <span className="sensor-exact-time">{stamp(d.last_heartbeat_at)}</span> : null}</dd></div>
+                        <div><dt>Last event</dt><dd><RelativeTime iso={d.last_event_at} />{d.last_event_at ? <span className="sensor-exact-time">{stamp(d.last_event_at)}</span> : null}</dd></div>
+                        <div><dt>Events, 24 h</dt><dd className="num">{fmtNum(d.events_24h ?? 0)}</dd></div>
+                        <div><dt>Type / persona</dt><dd>{d.type || "—"} · {d.persona || "—"}</dd></div>
+                        <div><dt>Agent / policy</dt><dd><span className="mono">{d.agent_version || "—"}</span> · {d.policy_version ?? "—"}</dd></div>
+                      </dl>
+                    </div>
+                  ))}
                 </div>
-                <Pill tone={d.status === "online" ? "ok" : "drift"}>
-                  {d.status === "online" ? "Online" : "Stale"}
-                </Pill>
-              </div>
+              </details>
             ))}
             <div className="health-row">
               <span
@@ -303,6 +322,29 @@ export default function Overview() {
 
 /** Beyond this many, a secondary list stops being a list and becomes a wall. */
 const MAX_SECONDARY = 3;
+
+const SENSOR_STATUS_ORDER = { online: 0, stale: 1, offline: 2 };
+const healthLabel = (status) => status === "online" ? "Online" : status === "offline" ? "Offline" : "Stale";
+const healthTone = (status) => status === "online" ? "ok" : status === "offline" ? "bad" : "drift";
+const healthDot = (status) => status === "online" ? "is-live" : status === "offline" ? "is-offline" : "is-pending";
+
+function groupSensors(sensors) {
+  const groups = new Map();
+  for (const sensor of sensors) {
+    const service = sensor.service || sensor.name || sensor.type || "Unknown service";
+    const key = service.trim().toLowerCase();
+    if (!groups.has(key)) groups.set(key, { key, service, name: sensor.name || service, sensors: [] });
+    groups.get(key).sensors.push(sensor);
+  }
+  return [...groups.values()].map((group) => {
+    group.sensors.sort((a, b) => new Date(b.last_heartbeat_at || 0) - new Date(a.last_heartbeat_at || 0));
+    const latestHeartbeat = group.sensors.find((sensor) => sensor.last_heartbeat_at)?.last_heartbeat_at || null;
+    const status = group.sensors.reduce((worst, sensor) =>
+      (SENSOR_STATUS_ORDER[sensor.status] ?? 1) > (SENSOR_STATUS_ORDER[worst] ?? 1) ? sensor.status : worst,
+    "online");
+    return { ...group, latestHeartbeat, status };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const ALL_STAGES = 6;
 const stagesLabel = (stages = []) =>

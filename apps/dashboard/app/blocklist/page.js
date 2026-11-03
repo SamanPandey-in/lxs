@@ -17,7 +17,7 @@ import { RelativeTime, SectionCard, UnblockModal } from "@/components/workspace"
 import { api, PROJECT } from "@/lib/core";
 import { usePolling } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
-import { stamp } from "@/lib/utils";
+import { fmtNum, stamp } from "@/lib/utils";
 
 export default function BlocklistPage() {
   const { data, error, loading, reload } = usePolling(() => api.blocklist(PROJECT), 4000, []);
@@ -102,6 +102,24 @@ export default function BlocklistPage() {
           <Pill tone="halted">Expired</Pill>
         )}
       </td>
+      <td title="Requests from this source the sensors and app middleware have refused since the block was applied. Proof the block is doing something.">
+        {b.refused_count != null ? (
+          <>
+            <strong className="num" style={{ color: b.status === "expired" ? "var(--text)" : "var(--ok)" }}>
+              {fmtNum(b.refused_count)}
+            </strong>
+            {b.last_refused_at && b.status !== "expired" ? (
+              <span className="table-sub">
+                last <RelativeTime iso={b.last_refused_at} />
+              </span>
+            ) : (
+              <span className="table-sub">refused</span>
+            )}
+          </>
+        ) : (
+          <span className="faint">—</span>
+        )}
+      </td>
       <td>
         {b.status !== "expired" ? (
           <button type="button" className="btn btn-sm" onClick={() => setTarget(b)}>
@@ -124,6 +142,24 @@ export default function BlocklistPage() {
           </button>
         }
       />
+
+      {active.length ? (
+        <div className="ds-proof" style={{ marginBottom: 2 }}>
+          <span className="vb-ico">
+            <ShieldCheck size={20} />
+          </span>
+          <div style={{ flex: 1 }}>
+            <h2>
+              {fmtNum(active.reduce((n, b) => n + (b.refused_count || 0), 0))} requests refused by{" "}
+              {active.length} active block{active.length === 1 ? "" : "s"}
+            </h2>
+            <div className="dim">
+              Not advisory: every sensor and the app middleware drops these sources. The per-block
+              count updates as more requests are turned away.
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <SectionCard title="Active blocks" detail={`${active.length} enforced`} flush>
         {loading && !data ? (
@@ -152,6 +188,7 @@ export default function BlocklistPage() {
                 "Created by",
                 "Expires",
                 "Applied on sensors",
+                "Requests refused",
                 "",
               ]}
             />
@@ -167,7 +204,18 @@ export default function BlocklistPage() {
       {expired.length ? (
         <SectionCard title="Expired" detail="History" flush>
           <Table>
-            <THead cols={["Source", "Reason", "Incident", "Created by", "Expired", "State", ""]} />
+            <THead
+              cols={[
+                "Source",
+                "Reason",
+                "Incident",
+                "Created by",
+                "Expired",
+                "State",
+                "Requests refused",
+                "",
+              ]}
+            />
             <tbody>
               {expired.map((b) => (
                 <Row key={b.id} b={b} />

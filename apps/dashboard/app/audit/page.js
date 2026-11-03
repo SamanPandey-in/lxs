@@ -14,7 +14,52 @@ import { AuditTable, FilterSelect, SectionCard, TextFilter } from "@/components/
 import { api, PROJECT } from "@/lib/core";
 import { usePolling } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
-import { csvEscape, downloadBlob, stamp } from "@/lib/utils";
+import { csvEscape, downloadBlob } from "@/lib/utils";
+
+// A plain-English sentence for one audit row, so the accountability record reads like
+// language, not like raw action ids (IMPR P1).
+function humanizeAudit(r) {
+  const who = r.actor === "system" ? "A system job" : r.actor;
+  const md = r.metadata || {};
+  const tgt = r.target || "the project";
+  const to = md.to ? ` (now ${md.to})` : "";
+  switch (r.action) {
+    case "block_ip":
+      return `${who} blocked ${tgt}${md.duration_hours ? ` for ${md.duration_hours} h` : ""}.`;
+    case "unblock_ip":
+      return `${who} unblocked ${tgt}.`;
+    case "incident.acknowledge":
+      return `${who} acknowledged ${tgt}${to}.`;
+    case "incident.resolve":
+      return `${who} resolved ${tgt}.`;
+    case "incident.false_positive":
+      return `${who} marked ${tgt} a false positive.`;
+    case "key.create":
+      return `${who} created an API key.`;
+    case "key.revoke":
+      return `${who} revoked an API key.`;
+    case "settings.update":
+      return `${who} changed project settings${md.field ? ` (${md.field})` : ""}.`;
+    default:
+      return `${who} ${r.action.replace(/[._]/g, " ")} on ${tgt}.`;
+  }
+}
+
+// Full timestamp with year and timezone — the audit log is a legal record, so the detail
+// view spells the time out even though the table keeps the app's compact stamp.
+function preciseStamp(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-GB", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  });
+}
 
 export default function AuditPage() {
   const { data, error, loading, reload } = usePolling(() => api.audit(PROJECT), 6000, []);
@@ -132,10 +177,11 @@ export default function AuditPage() {
       <Drawer open={!!open} onClose={() => setOpen(null)} title={open ? open.action : ""}>
         {open ? (
           <div className="detail-stack">
+            <p style={{ fontSize: 14, fontWeight: 540, margin: 0 }}>{humanizeAudit(open)}</p>
             <dl className="ds-facts">
               <div>
                 <dt>Time</dt>
-                <dd>{stamp(open.at)}</dd>
+                <dd>{preciseStamp(open.at)}</dd>
               </div>
               <div>
                 <dt>Actor</dt>

@@ -158,7 +158,8 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         for (const t of d.techniques as { id: string }[])
           if (!techDetails.has(t.id)) techDetails.set(t.id, t);
 
-      const out = (summaries[0]?.output ?? null) as IncidentDetail['ai_summary'];
+      const latestSummary = summaries[0];
+      const out = (latestSummary?.output ?? null) as IncidentDetail['ai_summary'];
       const assessment = (assessments[0]?.output ?? null) as IncidentDetail['ai_assessment'];
       return {
         ...toIncidentSummary(r),
@@ -174,7 +175,7 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         })),
         ai_summary: out,
         ai_assessment: assessment,
-        ai_kind: assessment ? 'assessment' : summaries[0] ? summaries[0].isFallback ? 'template' : 'summary' : null,
+        ai_kind: assessment ? 'assessment' : latestSummary ? latestSummary.isFallback ? 'template' : 'summary' : null,
         // extras for the UI
         floor: r.floor,
         opened_at: iso(r.openedAt),

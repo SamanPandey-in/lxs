@@ -20,6 +20,19 @@ import { useAsync } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
 import { stamp } from "@/lib/utils";
 
+// Non-empty, trimmed allowlist lines.
+const normAllow = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+
+// Returns the lines that are not a valid IPv4/IPv6 address or CIDR range.
+function invalidCidrs(lines) {
+  const v4 = /^(\d{1,3})(\.\d{1,3}){3}(\/(\d|[12]\d|3[0-2]))?$/;
+  const v6 = /^[0-9a-fA-F:]+(\/\d{1,3})?$/;
+  return lines.filter((l) => {
+    if (v4.test(l)) return l.split(/[./]/).slice(0, 4).some((o) => Number(o) > 255);
+    return !v6.test(l);
+  });
+}
+
 export default function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.settings(PROJECT), []);
   const [keys, setKeys] = useState([]);
@@ -34,6 +47,8 @@ export default function SettingsPage() {
   const [projectName, setProjectName] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
   const [hook, setHook] = useState(null);
+  // Snapshot of the last-saved values, so "Save changes" knows what (if anything) changed.
+  const [baseline, setBaseline] = useState(null);
 
   useEffect(() => {
     if (!data) return;
@@ -43,6 +58,12 @@ export default function SettingsPage() {
     setRetention(data.retention_days ?? 30);
     setAi(data.ai_narration ?? true);
     setCapture(data.credential_capture || "masked");
+    setBaseline({
+      allow: (data.allowlist || []).join("\n"),
+      retention: data.retention_days ?? 30,
+      ai: data.ai_narration ?? true,
+      capture: data.credential_capture || "masked",
+    });
   }, [data]);
 
   if (loading && !data)
@@ -94,6 +115,23 @@ export default function SettingsPage() {
     }
   };
 
+  const badCidrs = invalidCidrs(normAllow(allow));
+  const changes = [];
+  if (baseline) {
+    if (normAllow(allow).join("\n") !== normAllow(baseline.allow).join("\n"))
+      changes.push("allowlist");
+    if (Number(retention) !== Number(baseline.retention)) changes.push("event retention");
+    if (ai !== baseline.ai) changes.push("AI narration");
+    if (capture !== baseline.capture) changes.push("credential capture");
+  }
+  const dirty = changes.length > 0;
+
+  const saveChanges = () => {
+    if (!dirty || badCidrs.length) return;
+    toast("Settings saved", "success", `Updated ${changes.join(", ")}. Policy version bumped and audited.`);
+    setBaseline({ allow, retention, ai, capture });
+  };
+
   return (
     <div className="ds-page">
       <PageHeader
@@ -108,11 +146,17 @@ export default function SettingsPage() {
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() =>
-                toast("Settings saved", "success", "Policy version bumped and audited.")
+              disabled={!dirty || badCidrs.length > 0}
+              title={
+                badCidrs.length
+                  ? "Fix the invalid allowlist entries first"
+                  : dirty
+                    ? `Unsaved: ${changes.join(", ")}`
+                    : "No changes to save"
               }
+              onClick={saveChanges}
             >
-              Save changes
+              {dirty ? "Save changes" : "Saved"}
             </button>
           </>
         }
@@ -224,13 +268,24 @@ export default function SettingsPage() {
               rows={5}
               value={allow}
               onChange={(e) => setAllow(e.target.value)}
+              placeholder={"10.0.0.0/8\n192.168.0.0/16\n203.0.113.42"}
+              aria-invalid={badCidrs.length > 0}
             />
+            {badCidrs.length ? (
+              <p role="alert" style={{ color: "var(--bad)", fontSize: 12, margin: "6px 0 0" }}>
+                Not a valid IP or CIDR range: {badCidrs.join(", ")}
+              </p>
+            ) : null}
           </Field>
         </SectionCard>
 
         <SectionCard title="Data & AI">
           <div className="col" style={{ gap: 4 }}>
-            <Field label="Event retention (days)" htmlFor="ret">
+            <Field
+              label="Event retention (days)"
+              htmlFor="ret"
+              hint="Events older than this are deleted permanently and drop out of the audit window."
+            >
               <input
                 id="ret"
                 type="number"
@@ -249,7 +304,12 @@ export default function SettingsPage() {
                   the LLM is down.
                 </p>
               </div>
-              <Switch checked={ai} onChange={setAi} label="AI narration" />
+              <div className="row" style={{ gap: 8, alignItems: "center" }}>
+                <span className="dim" style={{ fontSize: 12.5, minWidth: 20 }}>
+                  {ai ? "On" : "Off"}
+                </span>
+                <Switch checked={ai} onChange={setAi} label="AI narration" />
+              </div>
             </div>
             <Field
               label="Credential capture mode"

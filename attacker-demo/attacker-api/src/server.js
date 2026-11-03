@@ -25,7 +25,7 @@ const PORT = Number(process.env.PORT || 6060);
 const HOST = process.env.HOST || '127.0.0.1';
 const CONTROL_TOKEN = process.env.ATTACKER_API_TOKEN || '';
 const ATTACK_MODE = (process.env.ATTACK_MODE || 'live').toLowerCase(); // live | safe
-const TARGET_APP_URL = process.env.TARGET_APP_URL || 'http://localhost:3000';
+const TARGET_APP_URL = process.env.TARGET_APP_URL || 'http://34.228.8.207:3001';
 const TARGET_SSH_HOST = process.env.TARGET_SSH_HOST || 'localhost';
 const TARGET_SSH_PORT = Number(process.env.TARGET_SSH_PORT || 22);
 

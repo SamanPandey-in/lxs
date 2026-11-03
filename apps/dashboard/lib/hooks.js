@@ -15,12 +15,16 @@ export function useAsync(fn, deps = []) {
   const fnRef = useRef(fn);
   fnRef.current = fn;
   const alive = useRef(true);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // Reset on setup, not only on cleanup: under React StrictMode the effect runs
+    // setup → cleanup → setup, so a cleanup-only reset would leave `alive` false for
+    // good and every resolved fetch would skip setState (perpetual skeletons). This
+    // also restores liveness when the component unmounts and remounts (route revisit).
+    alive.current = true;
+    return () => {
       alive.current = false;
-    },
-    [],
-  );
+    };
+  }, []);
 
   const run = useCallback(async (silent) => {
     if (!silent) setState((s) => ({ ...s, loading: true, error: null }));

@@ -246,6 +246,7 @@ function Ledger({ inc, events }) {
         {" → "}
         <strong>{sev.label.toUpperCase()}</strong>, label <strong>{inc.label}</strong>.
         <div className="dim" style={{ marginTop: 3, fontSize: 12 }}>
+          {raw > 100 ? "* marks detections scored past the 100-point cap. " : ""}
           Points are additive and deterministic. The AI summary only narrates this ledger; it never
           changes the score.
         </div>
@@ -417,28 +418,85 @@ function EvidenceCard({ attacker, events }) {
   );
 }
 
-function AiBand({
+// Primary actions, pinned below the top bar so Block/Export/Resolve are always one
+// click away — never buried under the AI summary (IMPR P1).
+function IncidentActions({
   inc,
   blocked,
+  busy,
   onBlock,
   onUnblock,
+  onExport,
   onAck,
   onResolve,
   onFalsePositive,
-  onExport,
-  onNarrate,
-  narrating,
-  busy,
 }) {
-  const ai = inc.ai_summary;
-  const assessment = inc.ai_assessment;
-  const pending = !ai && (inc.ai_status === "pending" || !inc.ai_status);
-  const generatingAssessment = inc.ai_status === "generating" && !assessment;
-  const failed = !ai && ["failed", "error"].includes(inc.ai_status);
   const isOpen = inc.status === "open";
   const closed = inc.status === "resolved" || inc.status === "false_positive";
   return (
-    <section className="ds-card ai-band" aria-label="AI summary and actions">
+    <div className="incident-actions" role="group" aria-label="Incident actions">
+      {blocked ? (
+        <>
+          <Pill
+            tone={blocked.status === "applied" ? "ok" : "drift"}
+            icon={blocked.status === "applied" ? ShieldCheck : Loader2}
+            large
+          >
+            {blocked.status === "applied"
+              ? blocked.total_sensors
+                ? `Blocked · applied on ${blocked.applied_sensors}/${blocked.total_sensors} sensors`
+                : "Blocked · enforced"
+              : "Block pending… pushing to sensors"}
+          </Pill>
+          <button type="button" className="btn" onClick={onUnblock}>
+            <ShieldCheck /> Unblock
+          </button>
+        </>
+      ) : (
+        <button type="button" className="btn btn-danger" onClick={onBlock} disabled={busy}>
+          <ShieldBan /> Block source · 24 h
+        </button>
+      )}
+      <Dropdown
+        label="Export IOCs"
+        icon={Download}
+        items={[
+          { label: "JSON", onClick: () => onExport("json") },
+          { label: "CSV", onClick: () => onExport("csv") },
+          { label: "STIX 2.1", onClick: () => onExport("stix") },
+        ]}
+      />
+      <span className="spacer" />
+      {isOpen ? (
+        <button type="button" className="btn" onClick={onAck} disabled={busy}>
+          <CheckCheck /> Acknowledge
+        </button>
+      ) : null}
+      {!closed ? (
+        <Dropdown
+          label="Resolve"
+          icon={CircleCheck}
+          items={[
+            { label: "Resolve incident", icon: CircleCheck, onClick: onResolve },
+            { label: "Mark false positive", icon: Flag, onClick: onFalsePositive },
+          ]}
+        />
+      ) : (
+        <StatusPill status={inc.status} />
+      )}
+    </div>
+  );
+}
+
+function AiBand({ inc, onNarrate, narrating }) {
+  const ai = inc.ai_summary;
+  const assessment = inc.ai_assessment;
+  const pending = !ai && (inc.ai_status === "pending" || !inc.ai_status);
+  const generatingSummary = !!ai?.is_fallback && ["pending", "generating"].includes(inc.ai_status);
+  const generatingAssessment = inc.ai_status === "generating" && !assessment;
+  const failed = !ai && ["failed", "error"].includes(inc.ai_status);
+  return (
+    <section className="ds-card ai-band" aria-label="AI summary">
       <div
         className="reason-box"
         data-tone={inc.severity === "critical" ? "bad" : undefined}
@@ -492,13 +550,14 @@ function AiBand({
           ) : (
             <Pill tone="halted">Unavailable</Pill>
           )}
+          {generatingSummary ? <Pill tone="drift" icon={Loader2}>LLM generating</Pill> : null}
           {generatingAssessment ? <Pill tone="drift" icon={Loader2}>Assessing novel activity</Pill> : null}
           {inc.ai_status === "error" ? <Pill tone="halted">Advisory assessment unavailable</Pill> : null}
           <span className="dim" style={{ fontSize: 12 }}>
             Narrates the ledger, never changes the score.
           </span>
           {(ai?.is_fallback || failed) && onNarrate ? (
-            <button type="button" className="btn btn-sm" disabled={busy || narrating} onClick={onNarrate}>
+            <button type="button" className="btn btn-sm" disabled={narrating} onClick={onNarrate}>
               {narrating ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
               {narrating ? "Generating…" : "Try AI summary again"}
             </button>
@@ -558,58 +617,6 @@ function AiBand({
               ? "Narration failed for this incident. The ledger above is the source of truth."
               : "No summary available."}
           </p>
-        )}
-      </div>
-
-      <div className="action-bar">
-        {blocked ? (
-          <>
-            <Pill
-              tone={blocked.status === "applied" ? "ok" : "drift"}
-              icon={blocked.status === "applied" ? ShieldCheck : Loader2}
-              large
-            >
-              {blocked.status === "applied"
-                ? blocked.total_sensors
-                  ? `Blocked · applied on ${blocked.applied_sensors}/${blocked.total_sensors} sensors`
-                  : "Blocked · enforced"
-                : "Block pending… pushing to sensors"}
-            </Pill>
-            <button type="button" className="btn" onClick={onUnblock}>
-              <ShieldCheck /> Unblock
-            </button>
-          </>
-        ) : (
-          <button type="button" className="btn btn-danger" onClick={onBlock} disabled={busy}>
-            <ShieldBan /> Block source · 24 h
-          </button>
-        )}
-        <Dropdown
-          label="Export IOCs"
-          icon={Download}
-          items={[
-            { label: "JSON", onClick: () => onExport("json") },
-            { label: "CSV", onClick: () => onExport("csv") },
-            { label: "STIX 2.1", onClick: () => onExport("stix") },
-          ]}
-        />
-        <span className="spacer" />
-        {isOpen ? (
-          <button type="button" className="btn" onClick={onAck} disabled={busy}>
-            <CheckCheck /> Acknowledge
-          </button>
-        ) : null}
-        {!closed ? (
-          <Dropdown
-            label="Resolve"
-            icon={CircleCheck}
-            items={[
-              { label: "Resolve incident", icon: CircleCheck, onClick: onResolve },
-              { label: "Mark false positive", icon: Flag, onClick: onFalsePositive },
-            ]}
-          />
-        ) : (
-          <StatusPill status={inc.status} />
         )}
       </div>
     </section>
@@ -900,29 +907,13 @@ export default function IncidentDetailPage() {
         </div>
       </section>
 
-      {/* TIMELINE | WHY */}
-      <div className="hero-split">
-        <Card
-          title="Attack timeline"
-          sub={`${events.length} events, oldest first. Red marks what tipped the severity.`}
-        >
-          <Timeline events={events} triggerMap={triggerMap} />
-        </Card>
-        <Card
-          title={`Why is this ${inc.severity}?`}
-          sub="Every detection: rule → points → reason → evidence"
-        >
-          <Ledger inc={inc} events={events} />
-        </Card>
-      </div>
-
-      {/* AI + ACTIONS */}
-      <AiBand
+      <IncidentActions
         inc={inc}
         blocked={blocked}
         busy={busy}
         onBlock={() => setBlockOpen(true)}
         onUnblock={() => setUnblockOpen(true)}
+        onExport={doExport}
         onAck={() =>
           act(
             () => api.patchIncident(inc.id, { status: "acknowledged" }),
@@ -944,7 +935,27 @@ export default function IncidentDetailPage() {
             "Moved to the Resolved tab.",
           )
         }
-        onExport={doExport}
+      />
+
+      {/* TIMELINE | WHY */}
+      <div className="hero-split">
+        <Card
+          title="Attack timeline"
+          sub={`${events.length} events, oldest first. Red marks what tipped the severity.`}
+        >
+          <Timeline events={events} triggerMap={triggerMap} />
+        </Card>
+        <Card
+          title={`Why is this ${inc.severity}?`}
+          sub="Every detection: rule → points → reason → evidence"
+        >
+          <Ledger inc={inc} events={events} />
+        </Card>
+      </div>
+
+      {/* AI SUMMARY */}
+      <AiBand
+        inc={inc}
         narrating={narrating}
         onNarrate={async () => {
           setNarrating(true);

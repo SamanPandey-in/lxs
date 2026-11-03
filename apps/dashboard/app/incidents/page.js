@@ -1,5 +1,5 @@
 "use client";
-import { CheckCheck, ShieldAlert, X } from "lucide-react";
+import { CheckCheck, Info, ShieldAlert, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 import {
@@ -11,7 +11,7 @@ import {
   Tabs,
   techTitle,
 } from "@/components/ui";
-import { IncidentsTable, SectionCard } from "@/components/workspace";
+import { IncidentsTable, SectionCard, TextFilter } from "@/components/workspace";
 import { api } from "@/lib/core";
 import { sortBySeverity, storeActions, useStore } from "@/lib/store";
 import { toast } from "@/lib/toast";
@@ -25,6 +25,7 @@ function Queue() {
   const router = useRouter();
   const technique = sp.get("technique");
   const [tab, setTab] = useState(sp.get("tab") || "targeted");
+  const [q, setQ] = useState("");
 
   const all = [...st.incidents.values()];
   const filtered = technique ? all.filter((i) => i.techniques.includes(technique)) : all;
@@ -42,7 +43,16 @@ function Queue() {
     [filtered],
   );
 
-  const rows = lists[tab];
+  const tq = q.trim().toLowerCase();
+  const rows = tq
+    ? lists[tab].filter(
+        (i) =>
+          i.src_ip.includes(tq) ||
+          `#${i.number}`.includes(tq) ||
+          String(i.number) === tq ||
+          i.title.toLowerCase().includes(tq),
+      )
+    : lists[tab];
   const empties = {
     targeted: [
       "No targeted incidents",
@@ -78,7 +88,7 @@ function Queue() {
       <PageHeader
         eyebrow="MONITOR / TRIAGE"
         title="Incident queue"
-        purpose="Label decides the queue, severity decides the order. Targeted is the main queue; opportunistic is batch review; noise is counted, not queued."
+        purpose="Label decides the queue; severity decides the order within it."
       />
 
       <SectionCard
@@ -118,13 +128,28 @@ function Queue() {
             { value: "resolved", label: "Resolved", count: lists.resolved.length },
           ]}
         />
+        <div className="ds-filter-bar">
+          <TextFilter
+            value={q}
+            onChange={setQ}
+            placeholder="Filter by IP, #number, or title…"
+            label="Search"
+          />
+          <span
+            className="dim"
+            title="Targeted is the main queue; opportunistic is batch review; noise is counted, not queued."
+            style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12 }}
+          >
+            <Info size={13} aria-hidden /> How the tabs work
+          </span>
+        </div>
         {!st.bootstrapped ? (
           <TableSkeleton />
         ) : !st.loaded && st.error ? (
           <ErrorState error={st.error} onRetry={storeActions.refresh} what="incidents" />
         ) : rows.length === 0 ? (
-          <EmptyState icon={ShieldAlert} title={empties[tab][0]}>
-            {empties[tab][1]}
+          <EmptyState icon={ShieldAlert} title={tq ? "No matches" : empties[tab][0]}>
+            {tq ? `No ${tab} incidents match "${q.trim()}".` : empties[tab][1]}
           </EmptyState>
         ) : (
           <IncidentsTable incidents={rows} />

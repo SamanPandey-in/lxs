@@ -27,6 +27,7 @@ export default function FeedPage() {
   const [type, setType] = useState("all");
   const [q, setQ] = useState("");
   const [hideSim, setHideSim] = useState(false);
+  const [limit, setLimit] = useState(120);
 
   const decoyOpts = [
     { value: "all", label: "All decoys" },
@@ -101,7 +102,13 @@ export default function FeedPage() {
         </button>
       </div>
 
-      <SectionCard title="Decoy events" detail={`${rows.length} shown`} flush>
+      <SectionCard
+        title="Decoy events"
+        detail={
+          rows.length > limit ? `Showing ${limit} of ${rows.length}` : `${rows.length} shown`
+        }
+        flush
+      >
         <div className="ds-filter-bar">
           <FilterSelect label="Decoy" value={decoy} onChange={setDecoy} options={decoyOpts} />
           <FilterSelect label="Event type" value={type} onChange={setType} options={typeOpts} />
@@ -129,10 +136,11 @@ export default function FeedPage() {
             Loosen the filters, or wait for the next decoy touch.
           </EmptyState>
         ) : (
+          <>
           <Table>
             <THead cols={["Time", "Source", "Decoy", "Event", "Detail", "Incident"]} />
             <tbody>
-              {rows.slice(0, 120).map((e) => {
+              {rows.slice(0, limit).map((e) => {
                 const inc = e.incident_id ? st.incidents.get(e.incident_id) : null;
                 return (
                   <tr
@@ -141,7 +149,10 @@ export default function FeedPage() {
                     tabIndex={0}
                     onClick={() => open(e)}
                     onKeyDown={(ev) => {
-                      if (ev.key === "Enter") open(e);
+                      if (ev.key === "Enter" || ev.key === " ") {
+                        ev.preventDefault();
+                        open(e);
+                      }
                     }}
                   >
                     <td className="mono" style={{ whiteSpace: "nowrap" }}>
@@ -171,7 +182,12 @@ export default function FeedPage() {
                           <span className="dim">#{inc.number}</span>
                         </span>
                       ) : (
-                        <span className="faint">below threshold</span>
+                        <span
+                          className="faint"
+                          title="A single decoy touch stays below the incident threshold — no incident has been raised for it yet."
+                        >
+                          Not an incident yet
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -179,6 +195,19 @@ export default function FeedPage() {
               })}
             </tbody>
           </Table>
+          {rows.length > limit ? (
+            <div style={{ display: "flex", justifyContent: "center", padding: "12px" }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setLimit((l) => l + 120)}
+              >
+                Show more · {rows.length - limit} older event
+                {rows.length - limit === 1 ? "" : "s"} hidden
+              </button>
+            </div>
+          ) : null}
+          </>
         )}
       </SectionCard>
     </div>

@@ -29,6 +29,20 @@
       "when": 1793440200000,
       "tag": "0003_ingest_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793491200000,
+      "tag": "0004_incident_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1793491201000,
+      "tag": "0005_drop_unused_session_idx",
+      "breakpoints": true
     }
   ]
 }

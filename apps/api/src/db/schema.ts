@@ -225,9 +225,7 @@ export const incidents = pgTable(
   },
   (t) => [
     uniqueIndex('incidents_project_number_uq').on(t.projectId, t.number),
-    uniqueIndex('incidents_one_active_per_attacker_uq')
-      .on(t.projectId, t.attackerId)
-      .where(sql`${t.status} in ('open','acknowledged')`),
+    index('incidents_project_attacker_status_idx').on(t.projectId, t.attackerId, t.status),
     index('incidents_queue_idx').on(
       t.projectId,
       t.status,

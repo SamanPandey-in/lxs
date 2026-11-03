@@ -396,6 +396,11 @@ a.chip:hover {
   border-color: color-mix(in srgb, var(--bad) 35%, transparent);
   background: var(--bad-muted);
 }
+/* Unverified / not-yet-run safety proof: amber, never the calm green. */
+.ds-proof[data-tone="warn"] {
+  border-color: color-mix(in srgb, var(--drift) 45%, transparent);
+  background: color-mix(in srgb, var(--drift) 12%, transparent);
+}
 .ds-proof .vb-ico {
   width: 38px;
   height: 38px;
@@ -408,6 +413,9 @@ a.chip:hover {
 }
 .ds-proof[data-tone="bad"] .vb-ico {
   background: var(--bad);
+}
+.ds-proof[data-tone="warn"] .vb-ico {
+  background: var(--drift);
 }
 .ds-proof h2 {
   font-size: 15px;
@@ -438,6 +446,18 @@ a.chip:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-dim);
+}
+.incident-techniques {
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 190px;
+}
+.incident-techniques .chip {
+  flex: 0 0 auto;
+  max-width: none;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .ds-filter-bar {
   display: flex;
@@ -1036,6 +1056,29 @@ tr.is-new {
   margin-top: 12px;
   border-top: 1px solid var(--border);
 }
+/* Sticky primary-action bar: pins just under the top bar (48px) so Block / Export /
+   Resolve stay reachable while scrolling the incident. z-index below the top bar's 5. */
+.incident-actions {
+  position: sticky;
+  top: 48px;
+  z-index: 4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 8px 22px -16px rgb(16 24 40 / 0.4);
+}
+@media (max-width: 680px) {
+  /* Below 680px the sidebar becomes a 56px top row and the top bar drops to top:56px. */
+  .incident-actions {
+    top: 104px;
+  }
+}
 
 /* ATT&CK matrix, onboarding steps */
 .matrix {
@@ -1074,7 +1117,9 @@ tr.is-new {
   font-size: 11.5px;
   line-height: 1.3;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--brand) calc(var(--heat) * 78%), var(--card));
+  /* Light mode: a gentler ramp keeps even the hottest cell light enough for dark text.
+     Dark mode (below) ramps brighter so the hottest cells flip to near-black text. */
+  background: color-mix(in srgb, var(--brand) calc(var(--heat) * 58%), var(--card));
   color: var(--text);
   transition:
     transform 0.08s,
@@ -1084,8 +1129,14 @@ tr.is-new {
   transform: translateY(-1px);
   border-color: var(--brand);
 }
+/* Hot cells only get the inverted text once the background is genuinely saturated
+   (heat > 0.62 in JS). Light mode keeps dark text — it reads across the whole teal
+   ramp — so the old white-on-pale-teal case is gone. Dark mode flips to near-black on
+   the bright teal. */
+.dark .cell {
+  background: color-mix(in srgb, var(--brand) calc(var(--heat) * 82%), var(--card));
+}
 .cell.is-hot {
-  color: #fff;
   border-color: transparent;
 }
 .dark .cell.is-hot {
@@ -1315,6 +1366,278 @@ body {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-faint);
+}
+
+/* Shared hierarchy layer: lift primary surfaces, keep secondary information quiet,
+   and make the active route and keyboard focus easy to spot. */
+.main {
+  background:
+    radial-gradient(ellipse at 50% -18%, color-mix(in srgb, var(--brand) 5%, transparent), transparent 58%),
+    var(--background);
+}
+.topbar {
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 65%, transparent);
+}
+/* Critical / high counts in the top bar link to the queue. */
+.sev-summary a {
+  color: inherit;
+  text-decoration: none;
+  border-radius: 5px;
+  padding: 1px 4px;
+  margin: 0 -2px;
+  transition: background-color 0.14s ease;
+}
+.sev-summary a:hover {
+  text-decoration: underline;
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+}
+.nav-item {
+  position: relative;
+  min-height: 36px;
+  border: 1px solid transparent;
+  transition: background-color .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+}
+.nav-item:hover {
+  border-color: color-mix(in srgb, var(--border) 65%, transparent);
+  transform: translateX(1px);
+}
+.nav-item[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--brand) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--brand);
+}
+.page-head {
+  align-items: center;
+}
+.page-head h1 {
+  line-height: 1.15;
+  letter-spacing: -.04em;
+}
+.ds-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.ds-eyebrow::before {
+  content: "";
+  width: 18px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--brand);
+}
+[data-slot='card'] {
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  box-shadow: 0 1px 2px rgb(16 24 40 / .035), 0 8px 24px -18px rgb(16 24 40 / .20);
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+.ds-tile-grid > [data-slot='card'],
+.overview-metrics > [data-slot='card'] {
+  position: relative;
+  overflow: hidden;
+}
+.ds-tile-grid > [data-slot='card']::before,
+.overview-metrics > [data-slot='card']::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  content: "";
+  background: color-mix(in srgb, var(--brand) 48%, var(--border));
+  opacity: .72;
+}
+[data-slot='card-header'] {
+  padding-top: 16px;
+  padding-bottom: 14px;
+}
+[data-slot='card-header'].border-b {
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+}
+[data-slot='card-title'] {
+  letter-spacing: -.012em;
+}
+.tile-label {
+  font-size: 11.5px;
+  font-weight: 550;
+  letter-spacing: .01em;
+}
+.tile-value {
+  margin-top: 10px;
+  font-size: 30px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.tile-hint {
+  margin-top: 7px;
+}
+.native-table th {
+  font-size: 9.5px;
+  letter-spacing: .09em;
+  background: color-mix(in srgb, var(--surface-2) 82%, var(--surface));
+}
+.native-table tbody tr {
+  transition: background-color .14s ease;
+}
+.native-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--brand) 4%, var(--surface));
+}
+.interactive-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.btn,
+[data-slot='button'] {
+  transition: box-shadow .16s ease, transform .16s ease, background-color .16s ease;
+}
+.btn-primary,
+[data-slot='button'][data-variant='default'] {
+  box-shadow: 0 2px 5px color-mix(in srgb, var(--brand) 22%, transparent);
+}
+.btn-primary:hover,
+[data-slot='button'][data-variant='default']:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 12px color-mix(in srgb, var(--brand) 23%, transparent);
+}
+:is(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.dark [data-slot='card'] {
+  box-shadow: 0 1px 2px rgb(0 0 0 / .18), 0 10px 26px -20px rgb(0 0 0 / .65);
+}
+.sensor-service + .sensor-service {
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+.sensor-service-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 14px 16px;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+.sensor-service-summary::-webkit-details-marker {
+  display: none;
+}
+.sensor-service-summary:hover {
+  background: color-mix(in srgb, var(--brand) 4%, var(--surface));
+}
+.sensor-service-summary:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline-offset: -3px;
+}
+.sensor-service-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+.sensor-service-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sensor-service-summary .ds-res-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sensor-service-chevron {
+  flex: none;
+  color: var(--text-faint);
+  transition: transform .18s ease;
+}
+.sensor-service[open] .sensor-service-chevron {
+  transform: rotate(180deg);
+}
+.sensor-service-details {
+  display: grid;
+  gap: 8px;
+  padding: 0 16px 16px 42px;
+  background: var(--surface-2);
+}
+.sensor-instance {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.sensor-instance-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sensor-instance-heading strong {
+  min-width: 0;
+  margin-right: auto;
+  font-size: 12px;
+}
+.sensor-instance-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0 0 18px;
+}
+.sensor-instance-facts > div {
+  min-width: 0;
+}
+.sensor-instance-facts dt {
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.sensor-instance-facts dd {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+}
+.sensor-exact-time {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nav-item,
+  [data-slot='card'],
+  .native-table tbody tr,
+  .btn,
+  [data-slot='button'] {
+    transition: none;
+  }
+  .sensor-service-summary,
+  .sensor-service-chevron {
+    transition: none;
+  }
+}
+@media (max-width: 720px) {
+  .sensor-instance-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 480px) {
+  .sensor-service-summary {
+    gap: 8px;
+    padding-inline: 12px;
+  }
+  .sensor-service-details {
+    padding-inline: 12px;
+  }
+  .sensor-instance-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ── The focal element: one incident, stated plainly, impossible to miss ───────────── */
