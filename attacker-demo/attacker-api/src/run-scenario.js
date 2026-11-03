@@ -85,7 +85,16 @@ export async function runScenario(scenario, { mode, emit, signal }) {
       let frame;
       try {
         if (step.kind === 'http') {
-          const result = await sendHttp({ method: step.method, path: step.path, simIp });
+          // Forward the scenario's headers and body too: the scanner user-agent
+          // (R03) and POST login credentials (R04/R06) live there, and dropping
+          // them meant live mode sent neither — only the manual console did.
+          const result = await sendHttp({
+            method: step.method,
+            path: step.path,
+            headers: step.headers,
+            body: step.body,
+            simIp,
+          });
           const isRealAsset = /\/api\/payments/.test(step.path || '');
           frame = {
             type: 'step',

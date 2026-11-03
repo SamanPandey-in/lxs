@@ -19,6 +19,9 @@ const CLIENT_IDS = [
   'ps-attacker',
   'sqli',
   'honeytoken',
+  'web-bruteforce',
+  'web-exploit',
+  'exfil-cleanup',
 ];
 
 describe('resolveScenario', () => {
@@ -120,5 +123,34 @@ describe('scenario fidelity', () => {
   it('noise stays on decoys so it cannot score a real-asset touch', () => {
     const events = buildReplayEvents('noise', '203.0.113.7').map((e) => DecoyEvent.parse(e));
     assert.ok(events.every((e) => e.is_decoy === true));
+  });
+
+  it('web-bruteforce has the failed-login burst and default-cred success R04/R06 need', () => {
+    const events = buildReplayEvents('web-bruteforce', '203.0.113.7').map((e) => DecoyEvent.parse(e));
+    const fails = events.filter((e) => e.event_type === 'auth.attempt' && e.outcome === 'failure');
+    // R04 needs >= 5 failures inside 60 s; the scenario spreads them two seconds apart.
+    assert.ok(fails.length >= 5, `expected >= 5 failed logins, got ${fails.length}`);
+    const span = Date.parse(fails.at(-1)!.timestamp) - Date.parse(fails[0]!.timestamp);
+    assert.ok(span <= 60_000, `failures span ${span} ms, must be <= 60 s for R04`);
+    const win = events.find(
+      (e) => e.event_type === 'auth.attempt' && e.outcome === 'success' && e.password_clear === 'admin',
+    );
+    assert.ok(win, 'web-bruteforce must end on a default-credential success for R06');
+  });
+
+  it('web-exploit carries the XSS signature that distinguishes it from sqli', () => {
+    const events = buildReplayEvents('web-exploit', '203.0.113.7').map((e) => DecoyEvent.parse(e));
+    const found = new Set(events.flatMap((e) => exploitTypes(e)));
+    // All four families are present; XSS is the one sqli never carries.
+    assert.ok(found.has('xss'), 'no XSS signature matched');
+    assert.ok(found.has('cmdi'), 'no command-injection signature matched');
+    assert.ok(found.has('traversal'), 'no traversal signature matched');
+  });
+
+  it('exfil-cleanup contains the transfer and history-clearing commands R09/R17 need', () => {
+    const events = buildReplayEvents('exfil-cleanup', '203.0.113.7').map((e) => DecoyEvent.parse(e));
+    const cmds = events.filter((e) => e.event_type === 'command.exec').map((e) => e.command ?? '');
+    assert.ok(cmds.some((c) => /^curl\b/.test(c)), 'no curl transfer command for R09');
+    assert.ok(cmds.some((c) => /history\s+-c|bash_history/.test(c)), 'no history/log clearing for R17');
   });
 });

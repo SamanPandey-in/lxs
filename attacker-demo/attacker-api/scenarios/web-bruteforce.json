@@ -1,0 +1,33 @@
+{
+  "id": "web-bruteforce",
+  "name": "Web login brute force",
+  "persona": "bot",
+  "seed": 11,
+  "narration": "Hydra-style credential stuffing against the /admin login: a burst of failed logins trips R04, then the default admin/admin gets in (R06). Expected High — the kind of noise that still matters because it succeeds.",
+  "steps": [
+    {
+      "kind": "http",
+      "method": "GET",
+      "path": "/admin",
+      "headers": { "User-Agent": "hydra/9.5" },
+      "note": "find the login form"
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "path": "/admin/login",
+      "headers": { "User-Agent": "hydra/9.5", "Content-Type": "application/json" },
+      "body": "{\"username\":\"admin\",\"password\":\"Password1\"}",
+      "note": "guess",
+      "repeat": 6
+    },
+    {
+      "kind": "http",
+      "method": "POST",
+      "path": "/admin/login",
+      "headers": { "User-Agent": "hydra/9.5", "Content-Type": "application/json" },
+      "body": "{\"username\":\"admin\",\"password\":\"admin\"}",
+      "note": "default creds — in"
+    }
+  ]
+}
