@@ -169,7 +169,9 @@ export class LXS {
         );
       }
     } else if (
-      this._decoys.some((d) => d.type !== 'web-admin' && d.type !== 'web-bait' && d.port === spec.port)
+      this._decoys.some(
+        (d) => d.type !== 'web-admin' && d.type !== 'web-bait' && d.port === spec.port,
+      )
     ) {
       throw new LXSConfigError('E_PORT_COLLISION', `host port ${spec.port} is declared twice.`);
     }

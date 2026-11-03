@@ -164,20 +164,33 @@ export async function runSelftest(
           ...Object.keys((info.Config?.ExposedPorts ?? {}) as Record<string, unknown>),
           ...Object.keys((info.NetworkSettings?.Ports ?? {}) as Record<string, unknown>),
         ]);
-        for (const [network, detail] of Object.entries((info.NetworkSettings?.Networks ?? {}) as Record<string, any>)) {
+        for (const [network, detail] of Object.entries(
+          (info.NetworkSettings?.Networks ?? {}) as Record<string, any>,
+        )) {
           const ip = String(detail.IPAddress ?? '');
           if (!ip) continue;
           for (const entry of ports) {
             const p = Number(entry.split('/')[0]);
-            if (Number.isInteger(p) && p > 0) customerTargets.push([`customer ${manifest.service} ${ip}:${p} (${network})`, ip, p]);
+            if (Number.isInteger(p) && p > 0)
+              customerTargets.push([`customer ${manifest.service} ${ip}:${p} (${network})`, ip, p]);
           }
         }
-        for (const [target, bindings] of Object.entries((info.HostConfig?.PortBindings ?? {}) as Record<string, any[]>)) {
+        for (const [target, bindings] of Object.entries(
+          (info.HostConfig?.PortBindings ?? {}) as Record<string, any[]>,
+        )) {
           const containerPort = Number(target.split('/')[0]);
           for (const binding of bindings ?? []) {
             const publishedPort = Number(binding.HostPort);
-            if (Number.isInteger(containerPort) && Number.isInteger(publishedPort) && publishedPort > 0) {
-              customerTargets.push([`customer ${manifest.service} published port ${publishedPort}`, 'host-gateway', publishedPort]);
+            if (
+              Number.isInteger(containerPort) &&
+              Number.isInteger(publishedPort) &&
+              publishedPort > 0
+            ) {
+              customerTargets.push([
+                `customer ${manifest.service} published port ${publishedPort}`,
+                'host-gateway',
+                publishedPort,
+              ]);
             }
           }
         }
@@ -185,7 +198,9 @@ export async function runSelftest(
     }
   }
 
-  const networkDecoys = manifest.decoys.filter((d) => ['ssh', 'redis', 'postgres'].includes(d.type));
+  const networkDecoys = manifest.decoys.filter((d) =>
+    ['ssh', 'redis', 'postgres'].includes(d.type),
+  );
   const services = [
     'ds-agent',
     ...(manifest.decoys.some((d) => d.type.startsWith('web')) ? ['ds-web'] : []),
@@ -256,13 +271,25 @@ export async function runSelftest(
   if (web) {
     const r = await execNode(web, ['-e', FS_PROBE_JS]);
     let probe: { names: string[]; assigned: string[]; defaultRoute: boolean } | null = null;
-    try { probe = JSON.parse(r.stdout) as { names: string[]; assigned: string[]; defaultRoute: boolean }; } catch { /* failed probe */ }
+    try {
+      probe = JSON.parse(r.stdout) as {
+        names: string[];
+        assigned: string[];
+        defaultRoute: boolean;
+      };
+    } catch {
+      /* failed probe */
+    }
     const safe = !!probe && probe.assigned.length === 0 && !probe.defaultRoute;
     add({
       name: 'network interfaces',
       target: 'ds-web',
       passed: r.code === 0 && safe,
-      detail: !probe ? 'could not probe' : safe ? `loopback only; ${probe.names.length - 1} unaddressed interfaces; no default route` : `addresses=${probe.assigned.join(',')}; default route=${probe.defaultRoute}`,
+      detail: !probe
+        ? 'could not probe'
+        : safe
+          ? `loopback only; ${probe.names.length - 1} unaddressed interfaces; no default route`
+          : `addresses=${probe.assigned.join(',')}; default route=${probe.defaultRoute}`,
     });
     const s = await execNode(web, [
       '-e',
@@ -310,14 +337,20 @@ export async function runSelftest(
         platformHost.port,
       ]);
     for (const [label, host, port] of customerTargets) {
-      const actualHost = host === 'host-gateway' ? (gw.stdout.trim() || '172.31.250.1') : host;
+      const actualHost = host === 'host-gateway' ? gw.stdout.trim() || '172.31.250.1' : host;
       probes.push([label, actualHost, port]);
     }
     for (const [label, host, port] of probes) {
-      const r = d.type === 'postgres'
-        ? await exec(id, ['nc', '-z', '-w', '2', host, String(port)])
-        : await exec(id, ['python3', '-c', PROBE_PY, host, String(port)]);
-      if (d.type === 'postgres' && (r.code === 126 || r.code === 127 || /executable file not found|no such file or directory/i.test(r.stderr))) {
+      const r =
+        d.type === 'postgres'
+          ? await exec(id, ['nc', '-z', '-w', '2', host, String(port)])
+          : await exec(id, ['python3', '-c', PROBE_PY, host, String(port)]);
+      if (
+        d.type === 'postgres' &&
+        (r.code === 126 ||
+          r.code === 127 ||
+          /executable file not found|no such file or directory/i.test(r.stderr))
+      ) {
         // A probe that cannot run proves nothing: never count it as "blocked".
         add({
           name: `-> ${label}`,
@@ -351,9 +384,17 @@ export async function runSelftest(
     } else {
       const first = ids.get(`ds-${networkDecoys[0]!.id}`);
       const networkNames = first
-        ? await run('docker', ['inspect', '-f', '{{range $name, $cfg := .NetworkSettings.Networks}}{{$name}} {{end}}', first])
+        ? await run('docker', [
+            'inspect',
+            '-f',
+            '{{range $name, $cfg := .NetworkSettings.Networks}}{{$name}} {{end}}',
+            first,
+          ])
         : { code: 1, stdout: '', stderr: '' };
-      const trapName = networkNames.stdout.trim().split(/\s+/).find((n) => n.endsWith('ds_trap'));
+      const trapName = networkNames.stdout
+        .trim()
+        .split(/\s+/)
+        .find((n) => n.endsWith('ds_trap'));
       let bridge = '';
       if (trapName) {
         const inspected = await run('docker', ['network', 'inspect', trapName]);
@@ -363,30 +404,34 @@ export async function runSelftest(
           if (!bridge && typeof net.Id === 'string') bridge = `br-${net.Id.slice(0, 12)}`;
         }
       }
-      const a = bridge ? await run('iptables', [
-        '-C',
-        'DOCKER-USER',
-        '-i',
-        bridge,
-        '-m',
-        'conntrack',
-        '--ctstate',
-        'NEW',
-        '-j',
-        'DROP',
-      ]) : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
-      const b = bridge ? await run('iptables', [
-        '-C',
-        'INPUT',
-        '-i',
-        bridge,
-        '-m',
-        'conntrack',
-        '--ctstate',
-        'NEW',
-        '-j',
-        'DROP',
-      ]) : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
+      const a = bridge
+        ? await run('iptables', [
+            '-C',
+            'DOCKER-USER',
+            '-i',
+            bridge,
+            '-m',
+            'conntrack',
+            '--ctstate',
+            'NEW',
+            '-j',
+            'DROP',
+          ])
+        : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
+      const b = bridge
+        ? await run('iptables', [
+            '-C',
+            'INPUT',
+            '-i',
+            bridge,
+            '-m',
+            'conntrack',
+            '--ctstate',
+            'NEW',
+            '-j',
+            'DROP',
+          ])
+        : { code: 127, stdout: '', stderr: 'ds_trap bridge unavailable' };
       const denied =
         /permission denied|you must be root|not permitted/i.test(a.stderr + b.stderr) ||
         a.code === 127;
@@ -400,8 +445,8 @@ export async function runSelftest(
           : !bridge
             ? 'skipped: could not determine the ds_trap bridge interface'
             : a.code === 0 && b.code === 0
-            ? 'PRESENT'
-            : 'MISSING',
+              ? 'PRESENT'
+              : 'MISSING',
       });
     }
   }

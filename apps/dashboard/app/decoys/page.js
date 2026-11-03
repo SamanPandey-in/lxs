@@ -68,7 +68,9 @@ export default function DecoysPage() {
         </div>
       ) : c ? (
         <div className="ds-proof" data-tone="warn">
-          <span className="vb-ico"><ShieldAlert size={20} /></span>
+          <span className="vb-ico">
+            <ShieldAlert size={20} />
+          </span>
           <div style={{ flex: 1 }}>
             <h2>Containment: NOT RUN</h2>
             <div className="dim">

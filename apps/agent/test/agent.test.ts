@@ -173,8 +173,13 @@ for (const impl of ['package', 'local'] as const) {
       fileKey: 'redis/redis.jsonl',
       offset: 10,
       text: JSON.stringify({
-        ts: '2026-11-01T10:00:00Z', src_ip: '203.0.113.9', src_port: 50000,
-        command: 'set', key: 'synthetic-password', value: 'must-not-be-retained', outcome: 'success',
+        ts: '2026-11-01T10:00:00Z',
+        src_ip: '203.0.113.9',
+        src_port: 50000,
+        command: 'set',
+        key: 'synthetic-password',
+        value: 'must-not-be-retained',
+        outcome: 'success',
       }),
     });
     assert.equal(redis?.sensor, 'redis');
@@ -190,9 +195,13 @@ for (const impl of ['package', 'local'] as const) {
       fileKey: 'postgres/postgres.json',
       offset: 20,
       text: JSON.stringify({
-        timestamp: '2026-11-01 10:01:00 UTC', remote_host: '198.51.100.12', remote_port: '50001',
-        user: 'lxs_fake', error_severity: 'FATAL',
-        message: 'password authentication failed for user "lxs_fake"; password=must-not-be-retained',
+        timestamp: '2026-11-01 10:01:00 UTC',
+        remote_host: '198.51.100.12',
+        remote_port: '50001',
+        user: 'lxs_fake',
+        error_severity: 'FATAL',
+        message:
+          'password authentication failed for user "lxs_fake"; password=must-not-be-retained',
       }),
     });
     assert.equal(failedAuth?.sensor, 'postgres');
@@ -208,7 +217,8 @@ for (const impl of ['package', 'local'] as const) {
       fileKey: 'postgres/postgres.json',
       offset: 21,
       text: JSON.stringify({
-        timestamp: '2026-11-01 10:02:00 UTC', remote_host: '198.51.100.12',
+        timestamp: '2026-11-01 10:02:00 UTC',
+        remote_host: '198.51.100.12',
         message: "statement: SELECT 'sql-literal-must-not-be-retained'",
       }),
     });

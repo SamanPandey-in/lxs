@@ -104,9 +104,7 @@ export default function FeedPage() {
 
       <SectionCard
         title="Decoy events"
-        detail={
-          rows.length > limit ? `Showing ${limit} of ${rows.length}` : `${rows.length} shown`
-        }
+        detail={rows.length > limit ? `Showing ${limit} of ${rows.length}` : `${rows.length} shown`}
         flush
       >
         <div className="ds-filter-bar">
@@ -137,76 +135,76 @@ export default function FeedPage() {
           </EmptyState>
         ) : (
           <>
-          <Table>
-            <THead cols={["Time", "Source", "Decoy", "Event", "Detail", "Incident"]} />
-            <tbody>
-              {rows.slice(0, limit).map((e) => {
-                const inc = e.incident_id ? st.incidents.get(e.incident_id) : null;
-                return (
-                  <tr
-                    key={e.id}
-                    className={`interactive-row${now - new Date(e.received_at).getTime() < 4500 ? " is-new" : ""}`}
-                    tabIndex={0}
-                    onClick={() => open(e)}
-                    onKeyDown={(ev) => {
-                      if (ev.key === "Enter" || ev.key === " ") {
-                        ev.preventDefault();
-                        open(e);
-                      }
-                    }}
-                  >
-                    <td className="mono" style={{ whiteSpace: "nowrap" }}>
-                      {clock(e.occurred_at)}
-                    </td>
-                    <td className="mono">{e.src_ip}</td>
-                    <td>{e.decoy_id || <Pill tone="bad">real app</Pill>}</td>
-                    <td>
-                      <span className="row" style={{ gap: 7 }}>
-                        <span
-                          className="ds-dot"
-                          style={{ marginTop: 0 }}
-                          data-tone={eventTone(e)}
-                        />
-                        {EVENT_LABEL[e.event_type] || e.event_type}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="cell-clip mono" style={{ maxWidth: 360 }}>
-                        {describeEvent(e)}
-                      </div>
-                    </td>
-                    <td>
-                      {inc ? (
-                        <span className="row" style={{ gap: 6 }}>
-                          <SeverityPill severity={inc.severity} />
-                          <span className="dim">#{inc.number}</span>
+            <Table>
+              <THead cols={["Time", "Source", "Decoy", "Event", "Detail", "Incident"]} />
+              <tbody>
+                {rows.slice(0, limit).map((e) => {
+                  const inc = e.incident_id ? st.incidents.get(e.incident_id) : null;
+                  return (
+                    <tr
+                      key={e.id}
+                      className={`interactive-row${now - new Date(e.received_at).getTime() < 4500 ? " is-new" : ""}`}
+                      tabIndex={0}
+                      onClick={() => open(e)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Enter" || ev.key === " ") {
+                          ev.preventDefault();
+                          open(e);
+                        }
+                      }}
+                    >
+                      <td className="mono" style={{ whiteSpace: "nowrap" }}>
+                        {clock(e.occurred_at)}
+                      </td>
+                      <td className="mono">{e.src_ip}</td>
+                      <td>{e.decoy_id || <Pill tone="bad">real app</Pill>}</td>
+                      <td>
+                        <span className="row" style={{ gap: 7 }}>
+                          <span
+                            className="ds-dot"
+                            style={{ marginTop: 0 }}
+                            data-tone={eventTone(e)}
+                          />
+                          {EVENT_LABEL[e.event_type] || e.event_type}
                         </span>
-                      ) : (
-                        <span
-                          className="faint"
-                          title="A single decoy touch stays below the incident threshold — no incident has been raised for it yet."
-                        >
-                          Not an incident yet
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </Table>
-          {rows.length > limit ? (
-            <div style={{ display: "flex", justifyContent: "center", padding: "12px" }}>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setLimit((l) => l + 120)}
-              >
-                Show more · {rows.length - limit} older event
-                {rows.length - limit === 1 ? "" : "s"} hidden
-              </button>
-            </div>
-          ) : null}
+                      </td>
+                      <td>
+                        <div className="cell-clip mono" style={{ maxWidth: 360 }}>
+                          {describeEvent(e)}
+                        </div>
+                      </td>
+                      <td>
+                        {inc ? (
+                          <span className="row" style={{ gap: 6 }}>
+                            <SeverityPill severity={inc.severity} />
+                            <span className="dim">#{inc.number}</span>
+                          </span>
+                        ) : (
+                          <span
+                            className="faint"
+                            title="A single decoy touch stays below the incident threshold — no incident has been raised for it yet."
+                          >
+                            Not an incident yet
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </Table>
+            {rows.length > limit ? (
+              <div style={{ display: "flex", justifyContent: "center", padding: "12px" }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setLimit((l) => l + 120)}
+                >
+                  Show more · {rows.length - limit} older event
+                  {rows.length - limit === 1 ? "" : "s"} hidden
+                </button>
+              </div>
+            ) : null}
           </>
         )}
       </SectionCard>

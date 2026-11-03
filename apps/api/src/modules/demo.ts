@@ -250,9 +250,26 @@ const SCENARIOS: Record<string, (ip: string) => Step[]> = {
   ],
   dynamic: () => [
     { gap: 0, ev: ssh('ssh.client', { client_banner: 'SSH-2.0-OpenSSH_9.6' }) },
-    { gap: 5, ev: ssh('auth.attempt', { username: 'admin', password_clear: 'admin', outcome: 'success' }) },
-    { gap: 7, ev: ssh('command.exec', { username: 'admin', command: 'cowsay deployment window', outcome: 'success' }) },
-    { gap: 9, ev: ssh('command.exec', { username: 'admin', command: './inventory-probe --format compact', outcome: 'success' }) },
+    {
+      gap: 5,
+      ev: ssh('auth.attempt', { username: 'admin', password_clear: 'admin', outcome: 'success' }),
+    },
+    {
+      gap: 7,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: 'cowsay deployment window',
+        outcome: 'success',
+      }),
+    },
+    {
+      gap: 9,
+      ev: ssh('command.exec', {
+        username: 'admin',
+        command: './inventory-probe --format compact',
+        outcome: 'success',
+      }),
+    },
   ],
   // Mirrors attacker-demo/attacker-api/scenarios/web-exploit.json: a nikto-style sweep
   // carrying four exploit families — XSS, command injection, traversal and SQLi. R05
@@ -286,14 +303,17 @@ const SCENARIOS: Record<string, (ip: string) => Step[]> = {
   // the default admin/admin then succeeds (R06). The hydra user-agent trips R03.
   'web-bruteforce': () => [
     { gap: 0, ev: web('web-admin-admin', '/admin', { user_agent: HYDRA_UA }) },
-    ...Array.from({ length: 6 }, (): Step => ({
-      gap: 2,
-      ev: webAuth('failure', {
-        user_agent: HYDRA_UA,
-        username: 'admin',
-        password_masked: 'P*******1',
+    ...Array.from(
+      { length: 6 },
+      (): Step => ({
+        gap: 2,
+        ev: webAuth('failure', {
+          user_agent: HYDRA_UA,
+          username: 'admin',
+          password_masked: 'P*******1',
+        }),
       }),
-    })),
+    ),
     {
       gap: 2,
       ev: webAuth('success', {

@@ -1,5 +1,12 @@
 name: CI
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
   push:
@@ -8,6 +15,7 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16-alpine
@@ -21,27 +29,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm build
       - run: pnpm test
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/lxs_test
-      # The generated compose output must be current, and the containment
-      # lint rule must hold, or the decoys are not provably sealed.
-      - run: pnpm --filter lxs exec node dist/cli/index.js build --check
+      # Generated compose output and containment checks are required CI gates.
+      - run: node ../../sdk/lxs/dist/cli/index.js build --check
         working-directory: examples/acme-shop
-        continue-on-error: true
 
   dashboard:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults: { run: { working-directory: apps/dashboard } }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm install
+      - run: npm ci
+      - run: npm test
       - run: npm run build

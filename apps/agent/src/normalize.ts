@@ -183,9 +183,10 @@ function normalizeDatabaseLine(
 ): DecoyEvent[] | null {
   if (source !== 'redis' && source !== 'postgres') return null;
   const timestamp = source === 'redis' ? rec.ts : rec.timestamp;
-  const ts = typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))
-    ? new Date(timestamp).toISOString()
-    : new Date().toISOString();
+  const ts =
+    typeof timestamp === 'string' && !Number.isNaN(Date.parse(timestamp))
+      ? new Date(timestamp).toISOString()
+      : new Date().toISOString();
   let ip = '';
   if (source === 'redis') ip = typeof rec.src_ip === 'string' ? rec.src_ip.trim() : '';
   else {
@@ -195,7 +196,11 @@ function normalizeDatabaseLine(
       : isIP(remote)
         ? remote
         : remote.replace(/:\d+$/, '');
-    ip = isIP(candidate) ? candidate : typeof rec.src_ip === 'string' && isIP(rec.src_ip) ? rec.src_ip : '';
+    ip = isIP(candidate)
+      ? candidate
+      : typeof rec.src_ip === 'string' && isIP(rec.src_ip)
+        ? rec.src_ip
+        : '';
   }
   if (!isIP(ip) || isLoopbackIp(ip)) return [];
   const base = {
@@ -212,13 +217,16 @@ function normalizeDatabaseLine(
     dst_service: `${source}:${opts.sshPorts.get(decoyId) ?? (source === 'redis' ? 6379 : 5432)}`,
   };
   if (source === 'redis') {
-    const command = typeof rec.command === 'string' ? rec.command.slice(0, 64).toUpperCase() : 'UNKNOWN';
-    return [{
-      ...base,
-      event_type: command === 'AUTH' ? 'auth.attempt' : 'db.command',
-      outcome: rec.outcome === 'failure' ? 'failure' : 'success',
-      command,
-    } as DecoyEvent];
+    const command =
+      typeof rec.command === 'string' ? rec.command.slice(0, 64).toUpperCase() : 'UNKNOWN';
+    return [
+      {
+        ...base,
+        event_type: command === 'AUTH' ? 'auth.attempt' : 'db.command',
+        outcome: rec.outcome === 'failure' ? 'failure' : 'success',
+        command,
+      } as DecoyEvent,
+    ];
   }
   const message = typeof rec.message === 'string' ? rec.message.slice(0, 2048) : '';
   const failed = /failed|authentication failed|no password supplied/i.test(message);
@@ -226,25 +234,30 @@ function normalizeDatabaseLine(
   const isConnect = /connection (received|authorized|authenticated)|disconnection:/i.test(message);
   const closed = /disconnection:/i.test(message);
   const verb = /statement:|execute /i.test(message)
-    ? message.match(/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|COPY|GRANT|REVOKE)\b/i)?.[1]?.toUpperCase() ?? 'SQL'
+    ? (message
+        .match(/\b(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|COPY|GRANT|REVOKE)\b/i)?.[1]
+        ?.toUpperCase() ?? 'SQL')
     : undefined;
-  const eventType = failed || authOk
-    ? 'auth.attempt'
-    : verb
-      ? 'db.command'
-      : closed
-        ? 'connection.close'
-        : isConnect
-          ? 'connection.open'
-          : null;
+  const eventType =
+    failed || authOk
+      ? 'auth.attempt'
+      : verb
+        ? 'db.command'
+        : closed
+          ? 'connection.close'
+          : isConnect
+            ? 'connection.open'
+            : null;
   if (!eventType) return [];
-  return [{
-    ...base,
-    event_type: eventType,
-    outcome: failed ? 'failure' : 'success',
-    username: clip(rec.user, 256),
-    ...(verb ? { command: verb } : {}),
-  } as DecoyEvent];
+  return [
+    {
+      ...base,
+      event_type: eventType,
+      outcome: failed ? 'failure' : 'success',
+      username: clip(rec.user, 256),
+      ...(verb ? { command: verb } : {}),
+    } as DecoyEvent,
+  ];
 }
 
 /**

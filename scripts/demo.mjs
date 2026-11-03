@@ -86,7 +86,8 @@ async function prepareApiPort() {
   const current = new URL(API);
   const requested = Number(current.port || 8081);
   if (await canListen(requested)) return requested;
-  if (process.env.API_URL) throw new Error(`API_URL port ${requested} is occupied and the API is not healthy`);
+  if (process.env.API_URL)
+    throw new Error(`API_URL port ${requested} is occupied and the API is not healthy`);
   for (let port = requested + 1; port <= requested + 20; port++) {
     if (await canListen(port)) {
       current.port = String(port);
@@ -125,7 +126,9 @@ function clearStalePort(port) {
 
   if (!pids.length) return false;
 
-  note(`releasing port ${port} from stale process${pids.length > 1 ? 'es' : ''}: ${pids.join(', ')}`);
+  note(
+    `releasing port ${port} from stale process${pids.length > 1 ? 'es' : ''}: ${pids.join(', ')}`,
+  );
   for (const pid of [...new Set(pids)]) {
     if (WIN) run('taskkill', ['/PID', String(pid), '/F'], { quiet: true });
     else run('kill', ['-9', String(pid)], { quiet: true });
@@ -190,7 +193,7 @@ function hostPortBound() {
 function configureAgentEnv() {
   const envFile = join(EXAMPLE, '.env.lxs');
   const lines = existsSync(envFile) ? readFileSync(envFile, 'utf8').split(/\r?\n/) : [];
-  const valueOf = (name) => {
+  const getEnvValue = (name) => {
     const line = lines.find((entry) => entry.startsWith(`${name}=`));
     return line?.slice(name.length + 1).trim() ?? '';
   };
@@ -200,7 +203,7 @@ function configureAgentEnv() {
     else if (force || !lines[i].slice(name.length + 1).trim()) lines[i] = `${name}=${value}`;
   };
 
-  const existingKey = valueOf('LXS_INGEST_KEY');
+  const existingKey = getEnvValue('LXS_INGEST_KEY');
   const key = existingKey || DEV_KEY;
   set('LXS_INGEST_KEY', key);
   const apiPort = new URL(API).port || '8081';
@@ -346,7 +349,8 @@ async function up() {
   }
   await waitFor('Dashboard at http://localhost:3000', () => httpOk('http://localhost:3000'), 180);
 
-  if (!flags.has('--no-sensors') && !(await sensors(projectId, agentConfig.isCustomKey))) process.exit(1);
+  if (!flags.has('--no-sensors') && !(await sensors(projectId, agentConfig.isCustomKey)))
+    process.exit(1);
   if (!flags.has('--no-attacker')) await attacker();
 
   banner(projectId, agentConfig.isCustomKey);
@@ -416,7 +420,17 @@ async function sensors(projectId, customKey = false) {
   step('Reloading the agent with the current .env.lxs key');
   const agentRestart = run(
     'docker',
-    ['compose', '-f', 'docker-compose.yml', '-f', 'lxs.compose.yml', 'up', '-d', '--force-recreate', 'ds-agent'],
+    [
+      'compose',
+      '-f',
+      'docker-compose.yml',
+      '-f',
+      'lxs.compose.yml',
+      'up',
+      '-d',
+      '--force-recreate',
+      'ds-agent',
+    ],
     { cwd: EXAMPLE, env: composeEnv },
   );
   if (agentRestart.status !== 0) {
@@ -454,7 +468,9 @@ async function sensors(projectId, customKey = false) {
     45,
   );
   if (!agentRegistered) {
-    fail('the agent did not register; check the ingest key and LXS_ENDPOINT in examples/acme-shop/.env.lxs');
+    fail(
+      'the agent did not register; check the ingest key and LXS_ENDPOINT in examples/acme-shop/.env.lxs',
+    );
     return false;
   }
 
@@ -481,7 +497,9 @@ async function sensors(projectId, customKey = false) {
     45,
   );
   if (!landed) {
-    fail('no decoy event reached the local project — check the agent endpoint/key and `docker compose logs ds-agent`');
+    fail(
+      'no decoy event reached the local project — check the agent endpoint/key and `docker compose logs ds-agent`',
+    );
     return false;
   }
   return true;

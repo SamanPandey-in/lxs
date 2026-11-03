@@ -230,9 +230,12 @@ async function saveSummary(
         },
       });
     const status = ready ? 'ready' : 'fallback';
-    await tx.update(incidents).set({
-      aiStatus: dsql`case when ${incidents.aiStatus} = 'generating' then 'generating' else ${status} end`,
-    }).where(eq(incidents.id, incidentId));
+    await tx
+      .update(incidents)
+      .set({
+        aiStatus: dsql`case when ${incidents.aiStatus} = 'generating' then 'generating' else ${status} end`,
+      })
+      .where(eq(incidents.id, incidentId));
     const [row] = (await tx
       .select(incidentSummaryCols)
       .from(incidents)

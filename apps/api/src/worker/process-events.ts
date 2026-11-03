@@ -341,12 +341,23 @@ async function processGroup(
       existingDetections: existing,
     });
 
-    const [projectConfig] = await tx.select({ aiEnabled: projects.aiEnabled }).from(projects).where(eq(projects.id, projectId)).limit(1);
+    const [projectConfig] = await tx
+      .select({ aiEnabled: projects.aiEnabled })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1);
     const uncovered = computeUncovered(
       chainEvents.map((event) => ({ event, tag: det.tagEvent(event, baseCtx) })),
       verdict.detections.flatMap((d) => d.evidence_event_ids),
     );
-    const assess = !!llmConfig && needsAssessment({ aiEnabled: projectConfig?.aiEnabled ?? false, label: verdict.label, uncovered, events: chainEvents });
+    const assess =
+      !!llmConfig &&
+      needsAssessment({
+        aiEnabled: projectConfig?.aiEnabled ?? false,
+        label: verdict.label,
+        uncovered,
+        events: chainEvents,
+      });
 
     // Replace detections.
     await tx.delete(detections).where(eq(detections.incidentId, incidentId));

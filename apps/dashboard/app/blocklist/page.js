@@ -105,7 +105,10 @@ export default function BlocklistPage() {
       <td title="Requests from this source the sensors and app middleware have refused since the block was applied. Proof the block is doing something.">
         {b.refused_count != null ? (
           <>
-            <strong className="num" style={{ color: b.status === "expired" ? "var(--text)" : "var(--ok)" }}>
+            <strong
+              className="num"
+              style={{ color: b.status === "expired" ? "var(--text)" : "var(--ok)" }}
+            >
               {fmtNum(b.refused_count)}
             </strong>
             {b.last_refused_at && b.status !== "expired" ? (

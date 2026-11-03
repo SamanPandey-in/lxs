@@ -296,7 +296,13 @@ export function resolveRedis(port: unknown, opts: RedisOptions | undefined): Red
 export function resolvePostgres(port: unknown, opts: PostgresOptions | undefined): PostgresSpec {
   const p = validatePort(port);
   const o = parseOrThrow(PostgresSchema, opts, 'E_OPTIONS', `postgres :${p}`);
-  return { type: 'postgres', id: o.id ?? `postgres-${p}`, port: p, seed: o.seed ?? 'shop', requirePassword: o.requirePassword ?? true };
+  return {
+    type: 'postgres',
+    id: o.id ?? `postgres-${p}`,
+    port: p,
+    seed: o.seed ?? 'shop',
+    requirePassword: o.requirePassword ?? true,
+  };
 }
 
 export function resolveAsset(pattern: unknown, opts: AssetOptions | undefined): AssetSpec {

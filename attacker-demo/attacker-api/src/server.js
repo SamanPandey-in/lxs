@@ -5,10 +5,10 @@
 // No persistence. Mutating routes require the demo control token; the web UI
 // keeps that token server-side and reaches this API through its Next.js proxy.
 
+import { timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { timingSafeEqual } from 'node:crypto';
 
 import cors from 'cors';
 import express from 'express';
@@ -93,7 +93,9 @@ app.post('/run', requireControlToken, async (req, res) => {
   activeRun = true;
   const controller = new AbortController();
   req.on('aborted', () => controller.abort());
-  res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+  res.on('close', () => {
+    if (!res.writableEnded) controller.abort();
+  });
   res.status(200);
   res.setHeader('content-type', 'application/x-ndjson');
   res.setHeader('cache-control', 'no-cache');

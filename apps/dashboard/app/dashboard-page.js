@@ -252,7 +252,9 @@ export default function Overview() {
                   <span className="sensor-service-copy">
                     <span className="sensor-service-name">{group.name}</span>
                     <span className="ds-res-meta">
-                      {group.service} · {group.sensors.length} sensor{group.sensors.length === 1 ? "" : "s"} · latest heartbeat {relative(group.latestHeartbeat, now)}
+                      {group.service} · {group.sensors.length} sensor
+                      {group.sensors.length === 1 ? "" : "s"} · latest heartbeat{" "}
+                      {relative(group.latestHeartbeat, now)}
                     </span>
                   </span>
                   <Pill tone={healthTone(group.status)}>{healthLabel(group.status)}</Pill>
@@ -267,12 +269,47 @@ export default function Overview() {
                         <Pill tone={healthTone(d.status)}>{healthLabel(d.status)}</Pill>
                       </div>
                       <dl className="sensor-instance-facts">
-                        <div><dt>Sensor ID</dt><dd className="mono">{d.id}</dd></div>
-                        <div><dt>Last heartbeat</dt><dd><RelativeTime iso={d.last_heartbeat_at} />{d.last_heartbeat_at ? <span className="sensor-exact-time">{stamp(d.last_heartbeat_at)}</span> : null}</dd></div>
-                        <div><dt>Last event</dt><dd><RelativeTime iso={d.last_event_at} />{d.last_event_at ? <span className="sensor-exact-time">{stamp(d.last_event_at)}</span> : null}</dd></div>
-                        <div><dt>Events, 24 h</dt><dd className="num">{fmtNum(d.events_24h ?? 0)}</dd></div>
-                        <div><dt>Type / persona</dt><dd>{d.type || "—"} · {d.persona || "—"}</dd></div>
-                        <div><dt>Agent / policy</dt><dd><span className="mono">{d.agent_version || "—"}</span> · {d.policy_version ?? "—"}</dd></div>
+                        <div>
+                          <dt>Sensor ID</dt>
+                          <dd className="mono">{d.id}</dd>
+                        </div>
+                        <div>
+                          <dt>Last heartbeat</dt>
+                          <dd>
+                            <RelativeTime iso={d.last_heartbeat_at} />
+                            {d.last_heartbeat_at ? (
+                              <span className="sensor-exact-time">
+                                {stamp(d.last_heartbeat_at)}
+                              </span>
+                            ) : null}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Last event</dt>
+                          <dd>
+                            <RelativeTime iso={d.last_event_at} />
+                            {d.last_event_at ? (
+                              <span className="sensor-exact-time">{stamp(d.last_event_at)}</span>
+                            ) : null}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Events, 24 h</dt>
+                          <dd className="num">{fmtNum(d.events_24h ?? 0)}</dd>
+                        </div>
+                        <div>
+                          <dt>Type / persona</dt>
+                          <dd>
+                            {d.type || "—"} · {d.persona || "—"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Agent / policy</dt>
+                          <dd>
+                            <span className="mono">{d.agent_version || "—"}</span> ·{" "}
+                            {d.policy_version ?? "—"}
+                          </dd>
+                        </div>
                       </dl>
                     </div>
                   ))}
@@ -324,26 +361,39 @@ export default function Overview() {
 const MAX_SECONDARY = 3;
 
 const SENSOR_STATUS_ORDER = { online: 0, stale: 1, offline: 2 };
-const healthLabel = (status) => status === "online" ? "Online" : status === "offline" ? "Offline" : "Stale";
-const healthTone = (status) => status === "online" ? "ok" : status === "offline" ? "bad" : "drift";
-const healthDot = (status) => status === "online" ? "is-live" : status === "offline" ? "is-offline" : "is-pending";
+const healthLabel = (status) =>
+  status === "online" ? "Online" : status === "offline" ? "Offline" : "Stale";
+const healthTone = (status) =>
+  status === "online" ? "ok" : status === "offline" ? "bad" : "drift";
+const healthDot = (status) =>
+  status === "online" ? "is-live" : status === "offline" ? "is-offline" : "is-pending";
 
 function groupSensors(sensors) {
   const groups = new Map();
   for (const sensor of sensors) {
     const service = sensor.service || sensor.name || sensor.type || "Unknown service";
     const key = service.trim().toLowerCase();
-    if (!groups.has(key)) groups.set(key, { key, service, name: sensor.name || service, sensors: [] });
+    if (!groups.has(key))
+      groups.set(key, { key, service, name: sensor.name || service, sensors: [] });
     groups.get(key).sensors.push(sensor);
   }
-  return [...groups.values()].map((group) => {
-    group.sensors.sort((a, b) => new Date(b.last_heartbeat_at || 0) - new Date(a.last_heartbeat_at || 0));
-    const latestHeartbeat = group.sensors.find((sensor) => sensor.last_heartbeat_at)?.last_heartbeat_at || null;
-    const status = group.sensors.reduce((worst, sensor) =>
-      (SENSOR_STATUS_ORDER[sensor.status] ?? 1) > (SENSOR_STATUS_ORDER[worst] ?? 1) ? sensor.status : worst,
-    "online");
-    return { ...group, latestHeartbeat, status };
-  }).sort((a, b) => a.name.localeCompare(b.name));
+  return [...groups.values()]
+    .map((group) => {
+      group.sensors.sort(
+        (a, b) => new Date(b.last_heartbeat_at || 0) - new Date(a.last_heartbeat_at || 0),
+      );
+      const latestHeartbeat =
+        group.sensors.find((sensor) => sensor.last_heartbeat_at)?.last_heartbeat_at || null;
+      const status = group.sensors.reduce(
+        (worst, sensor) =>
+          (SENSOR_STATUS_ORDER[sensor.status] ?? 1) > (SENSOR_STATUS_ORDER[worst] ?? 1)
+            ? sensor.status
+            : worst,
+        "online",
+      );
+      return { ...group, latestHeartbeat, status };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const ALL_STAGES = 6;

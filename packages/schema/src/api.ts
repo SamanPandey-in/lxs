@@ -56,7 +56,9 @@ export const IncidentSummary = z.object({
   event_count: z.number().int(),
   first_event_at: z.string().datetime(),
   last_event_at: z.string().datetime(),
-  ai_status: z.enum(['pending', 'generating', 'ready', 'fallback', 'failed', 'error']).default('pending'),
+  ai_status: z
+    .enum(['pending', 'generating', 'ready', 'fallback', 'failed', 'error'])
+    .default('pending'),
   ai_headline: z.string().nullable().optional(),
 });
 export type IncidentSummary = z.infer<typeof IncidentSummary>;
@@ -70,15 +72,21 @@ export const AiSummary = z.object({
 });
 export type AiSummary = z.infer<typeof AiSummary>;
 
-export const AiAssessment = z.object({
-  suggested_severity: z.enum(['low', 'medium', 'high']),
-  suggested_label: z.enum(['noise', 'opportunistic', 'targeted']),
-  confidence: z.number().min(0).max(1),
-  novel_behaviour: z.string().max(600),
-  rationale: z.string().max(800),
-  suggested_techniques: z.array(z.string().regex(/^T\d{4}(\.\d{3})?$/)).max(6),
-  recommended_actions: z.array(z.enum(['block_ip', 'export_iocs', 'review_asset_logs', 'rotate_credentials', 'no_action'])).max(4),
-}).strict();
+export const AiAssessment = z
+  .object({
+    suggested_severity: z.enum(['low', 'medium', 'high']),
+    suggested_label: z.enum(['noise', 'opportunistic', 'targeted']),
+    confidence: z.number().min(0).max(1),
+    novel_behaviour: z.string().max(600),
+    rationale: z.string().max(800),
+    suggested_techniques: z.array(z.string().regex(/^T\d{4}(\.\d{3})?$/)).max(6),
+    recommended_actions: z
+      .array(
+        z.enum(['block_ip', 'export_iocs', 'review_asset_logs', 'rotate_credentials', 'no_action']),
+      )
+      .max(4),
+  })
+  .strict();
 export type AiAssessment = z.infer<typeof AiAssessment>;
 
 export const IncidentDetail = IncidentSummary.extend({

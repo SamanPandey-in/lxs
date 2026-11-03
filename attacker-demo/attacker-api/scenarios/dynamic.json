@@ -6,7 +6,13 @@
   "narration": "Logs in with a default credential, then runs unfamiliar commands the deterministic rules do not classify. The rule ledger remains authoritative while the AI provides a separate advisory assessment.",
   "steps": [
     { "kind": "ssh", "action": "connect" },
-    { "kind": "ssh", "action": "login", "username": "admin", "password": "admin", "expect": "success" },
+    {
+      "kind": "ssh",
+      "action": "login",
+      "username": "admin",
+      "password": "admin",
+      "expect": "success"
+    },
     { "kind": "ssh", "action": "command", "cmd": "cowsay deployment window" },
     { "kind": "ssh", "action": "command", "cmd": "./inventory-probe --format compact" }
   ]

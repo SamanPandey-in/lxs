@@ -27,11 +27,20 @@ function looksLikeDecoy(headers, bodyText) {
 export async function sendHttp({ method = 'GET', path = '/', headers = {}, body, simIp }) {
   let url;
   try {
-    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) throw new Error('path_must_be_root_relative');
+    if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//'))
+      throw new Error('path_must_be_root_relative');
     url = new URL(path, TARGET_APP_URL);
-    if (url.origin !== new URL(TARGET_APP_URL).origin) throw new Error('path_must_be_root_relative');
+    if (url.origin !== new URL(TARGET_APP_URL).origin)
+      throw new Error('path_must_be_root_relative');
   } catch (err) {
-    return { status: 0, blocked: false, isDecoy: false, body: '', note: `refused: ${err.message}`, error: err.message };
+    return {
+      status: 0,
+      blocked: false,
+      isDecoy: false,
+      body: '',
+      note: `refused: ${err.message}`,
+      error: err.message,
+    };
   }
   const guard = checkAllowed(url.hostname);
   if (!guard.ok) {

@@ -505,28 +505,38 @@ function AiBand({ inc, onNarrate, narrating }) {
         {assessment ? (
           <div className="reason-box" style={{ marginBottom: 16 }}>
             <div className="row" style={{ marginBottom: 8, gap: 10 }}>
-              <span className="ai-label"><Sparkles size={13} /> AI-flagged novel behaviour</span>
+              <span className="ai-label">
+                <Sparkles size={13} /> AI-flagged novel behaviour
+              </span>
               <Pill tone="brand">Advisory</Pill>
               <SeverityPill severity={assessment.suggested_severity} />
               <span className="dim" style={{ fontSize: 12 }}>
-                Suggested {assessment.suggested_label} · {Math.round(assessment.confidence * 100)}% confidence · deterministic score unchanged
+                Suggested {assessment.suggested_label} · {Math.round(assessment.confidence * 100)}%
+                confidence · deterministic score unchanged
               </span>
             </div>
             <p style={{ fontWeight: 650 }}>{assessment.novel_behaviour}</p>
             <p className="dim">{assessment.rationale}</p>
             {assessment.suggested_techniques.length ? (
               <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
-                {assessment.suggested_techniques.map((t) => <Chip key={t}>{t}</Chip>)}
+                {assessment.suggested_techniques.map((t) => (
+                  <Chip key={t}>{t}</Chip>
+                ))}
               </div>
             ) : null}
             {assessment.recommended_actions.length ? (
               <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
-                {assessment.recommended_actions.map((a) => <Chip key={a}>{a.replaceAll("_", " ")}</Chip>)}
+                {assessment.recommended_actions.map((a) => (
+                  <Chip key={a}>{a.replaceAll("_", " ")}</Chip>
+                ))}
               </div>
             ) : null}
           </div>
         ) : generatingAssessment ? (
-          <p className="dim" style={{ marginBottom: 12 }}>AI is assessing uncovered activity. Its result is advisory and cannot change the rule score or trigger containment.</p>
+          <p className="dim" style={{ marginBottom: 12 }}>
+            AI is assessing uncovered activity. Its result is advisory and cannot change the rule
+            score or trigger containment.
+          </p>
         ) : null}
         <div className="row" style={{ marginBottom: 8, gap: 10 }}>
           <span className="ai-label">
@@ -550,9 +560,19 @@ function AiBand({ inc, onNarrate, narrating }) {
           ) : (
             <Pill tone="halted">Unavailable</Pill>
           )}
-          {generatingSummary ? <Pill tone="drift" icon={Loader2}>LLM generating</Pill> : null}
-          {generatingAssessment ? <Pill tone="drift" icon={Loader2}>Assessing novel activity</Pill> : null}
-          {inc.ai_status === "error" ? <Pill tone="halted">Advisory assessment unavailable</Pill> : null}
+          {generatingSummary ? (
+            <Pill tone="drift" icon={Loader2}>
+              LLM generating
+            </Pill>
+          ) : null}
+          {generatingAssessment ? (
+            <Pill tone="drift" icon={Loader2}>
+              Assessing novel activity
+            </Pill>
+          ) : null}
+          {inc.ai_status === "error" ? (
+            <Pill tone="halted">Advisory assessment unavailable</Pill>
+          ) : null}
           <span className="dim" style={{ fontSize: 12 }}>
             Narrates the ledger, never changes the score.
           </span>
@@ -961,7 +981,11 @@ export default function IncidentDetailPage() {
           setNarrating(true);
           try {
             await api.narrateIncident(inc.id);
-            toast("AI summary queued", "success", "The incident page will update when narration finishes.");
+            toast(
+              "AI summary queued",
+              "success",
+              "The incident page will update when narration finishes.",
+            );
             setTimeout(reload, 2500);
           } catch (e) {
             toast("Could not generate AI summary", "error", e.message);

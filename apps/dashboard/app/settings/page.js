@@ -21,14 +21,22 @@ import { toast } from "@/lib/toast";
 import { stamp } from "@/lib/utils";
 
 // Non-empty, trimmed allowlist lines.
-const normAllow = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+const normAllow = (s) =>
+  s
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
 
 // Returns the lines that are not a valid IPv4/IPv6 address or CIDR range.
 function invalidCidrs(lines) {
   const v4 = /^(\d{1,3})(\.\d{1,3}){3}(\/(\d|[12]\d|3[0-2]))?$/;
   const v6 = /^[0-9a-fA-F:]+(\/\d{1,3})?$/;
   return lines.filter((l) => {
-    if (v4.test(l)) return l.split(/[./]/).slice(0, 4).some((o) => Number(o) > 255);
+    if (v4.test(l))
+      return l
+        .split(/[./]/)
+        .slice(0, 4)
+        .some((o) => Number(o) > 255);
     return !v6.test(l);
   });
 }
@@ -128,7 +136,11 @@ export default function SettingsPage() {
 
   const saveChanges = () => {
     if (!dirty || badCidrs.length) return;
-    toast("Settings saved", "success", `Updated ${changes.join(", ")}. Policy version bumped and audited.`);
+    toast(
+      "Settings saved",
+      "success",
+      `Updated ${changes.join(", ")}. Policy version bumped and audited.`,
+    );
     setBaseline({ allow, retention, ai, capture });
   };
 

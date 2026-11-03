@@ -128,20 +128,40 @@ export function renderCompose(cfg: ResolvedConfig): string {
   }
 
   for (const s of redis) {
-    push('', `  ds-${s.id}:`, '    <<: *ds-hardened',
+    push(
+      '',
+      `  ds-${s.id}:`,
+      '    <<: *ds-hardened',
       `    image: \${LXS_REDIS_IMAGE:-ghcr.io/lxs/decoy-redis:${IMAGE_TAG}}`,
-      '    networks: [ds_trap]', `    ports: ["${s.port}:6379"]`,
-      '    mem_limit: 128m', '    cpus: 0.25', '    pids_limit: 64',
+      '    networks: [ds_trap]',
+      `    ports: ["${s.port}:6379"]`,
+      '    mem_limit: 128m',
+      '    cpus: 0.25',
+      '    pids_limit: 64',
       '    tmpfs: ["/tmp:size=8m,noexec,nosuid"]',
-      '    volumes:', `      - ds_${sanitize(s.id)}_logs:/var/log/lxs:rw`,
-      '    environment:', `      LXS_DECOY_ID: "${s.id}"`, `      LXS_REDIS_SEED: "${s.seed}"`,
-      `      LXS_REDIS_REQUIRE_PASSWORD: "${s.requirePassword ? '1' : '0'}"`);
+      '    volumes:',
+      `      - ds_${sanitize(s.id)}_logs:/var/log/lxs:rw`,
+      '    environment:',
+      `      LXS_DECOY_ID: "${s.id}"`,
+      `      LXS_REDIS_SEED: "${s.seed}"`,
+      `      LXS_REDIS_REQUIRE_PASSWORD: "${s.requirePassword ? '1' : '0'}"`,
+    );
   }
   for (const s of postgres) {
-    push('', `  ds-${s.id}:`, '    <<: *ds-hardened',
-      `    image: \${LXS_POSTGRES_IMAGE:-ghcr.io/lxs/decoy-postgres:${IMAGE_TAG}}`, '    networks: [ds_trap]',
-      `    ports: ["${s.port}:5432"]`, '    user: "70:70"', '    mem_limit: 256m', '    cpus: 0.5', '    pids_limit: 128',
-      '    environment:', '      POSTGRES_USER: postgres', '      POSTGRES_PASSWORD: postgres_fake_only',
+    push(
+      '',
+      `  ds-${s.id}:`,
+      '    <<: *ds-hardened',
+      `    image: \${LXS_POSTGRES_IMAGE:-ghcr.io/lxs/decoy-postgres:${IMAGE_TAG}}`,
+      '    networks: [ds_trap]',
+      `    ports: ["${s.port}:5432"]`,
+      '    user: "70:70"',
+      '    mem_limit: 256m',
+      '    cpus: 0.5',
+      '    pids_limit: 128',
+      '    environment:',
+      '      POSTGRES_USER: postgres',
+      '      POSTGRES_PASSWORD: postgres_fake_only',
       `      POSTGRES_HOST_AUTH_METHOD: "${s.requirePassword ? 'scram-sha-256' : 'trust'}"`,
       `      POSTGRES_DB: "${s.seed === 'shop' ? 'shop_prod' : 'finance'}"`,
       '      PGDATA: /var/lib/postgresql/data',
@@ -150,7 +170,12 @@ export function renderCompose(cfg: ResolvedConfig): string {
       '    volumes:',
       `      - ds_${sanitize(s.id)}_logs:/var/log/lxs`,
       `      - ./.lxs/${s.id}/init.sql:/docker-entrypoint-initdb.d/10-lxs-seed.sql:ro`,
-      '    healthcheck:', `      test: ["CMD-SHELL", "pg_isready -U lxs_fake -d ${s.seed === 'shop' ? 'shop_prod' : 'finance'}"]`, '      interval: 30s', '      timeout: 5s', '      retries: 3');
+      '    healthcheck:',
+      `      test: ["CMD-SHELL", "pg_isready -U lxs_fake -d ${s.seed === 'shop' ? 'shop_prod' : 'finance'}"]`,
+      '      interval: 30s',
+      '      timeout: 5s',
+      '      retries: 3',
+    );
   }
 
   push('', 'networks:');

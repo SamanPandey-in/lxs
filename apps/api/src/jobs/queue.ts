@@ -15,7 +15,9 @@ export interface NarrateIncidentJob {
   incidentId: string;
 }
 
-export interface AssessIncidentJob { incidentId: string }
+export interface AssessIncidentJob {
+  incidentId: string;
+}
 
 export interface ProcessEventsJob {
   projectId?: string;
@@ -95,24 +97,34 @@ const narrateTimers = new Map<string, NodeJS.Timeout>();
 type Assessor = (incidentId: string) => Promise<unknown>;
 let inProcessAssessor: Assessor | null = null;
 const assessTimers = new Map<string, NodeJS.Timeout>();
-export const setInProcessAssessor = (fn: Assessor): void => { inProcessAssessor = fn; };
+export const setInProcessAssessor = (fn: Assessor): void => {
+  inProcessAssessor = fn;
+};
 
 export async function enqueueAssessIncident(incidentId: string): Promise<void> {
   const b = getBoss();
   if (b) {
     try {
       await b.send(QUEUES.assessIncident, { incidentId } satisfies AssessIncidentJob, {
-        retryLimit: 2, retryBackoff: true, retryDelay: 2, singletonKey: incidentId,
+        retryLimit: 2,
+        retryBackoff: true,
+        retryDelay: 2,
+        singletonKey: incidentId,
       });
       return;
-    } catch { /* fall through to in-process */ }
+    } catch {
+      /* fall through to in-process */
+    }
   }
   if (inProcessAssessor && !assessTimers.has(incidentId)) {
     const fn = inProcessAssessor;
-    assessTimers.set(incidentId, setTimeout(() => {
-      assessTimers.delete(incidentId);
-      void fn(incidentId).catch(() => {});
-    }, 0));
+    assessTimers.set(
+      incidentId,
+      setTimeout(() => {
+        assessTimers.delete(incidentId);
+        void fn(incidentId).catch(() => {});
+      }, 0),
+    );
   }
 }
 export const setInProcessNarrator = (fn: Narrator): void => {

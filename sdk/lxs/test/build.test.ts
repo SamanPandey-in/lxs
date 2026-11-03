@@ -57,7 +57,9 @@ test('Redis and Postgres render as isolated, bounded network decoys', () => {
     .create('postgres', 5433, { seed: 'shop', requirePassword: true })
     .resolve();
   const generated = generateAll(cfg);
-  const doc = parseYaml(generated.committed.get('lxs.compose.yml') as string, { merge: true }) as any;
+  const doc = parseYaml(generated.committed.get('lxs.compose.yml') as string, {
+    merge: true,
+  }) as any;
   const redis = doc.services['ds-redis-6380'];
   const postgres = doc.services['ds-postgres-5433'];
 
@@ -75,15 +77,22 @@ test('Redis and Postgres render as isolated, bounded network decoys', () => {
   assert.deepEqual(postgres.ports, ['5433:5432']);
   assert.equal(postgres.environment.POSTGRES_HOST_AUTH_METHOD, 'scram-sha-256');
   assert.equal(postgres.env_file, undefined);
-  assert.ok((postgres.tmpfs as string[]).some((v) => v.startsWith('/var/lib/postgresql/data:size=128m')));
+  assert.ok(
+    (postgres.tmpfs as string[]).some((v) => v.startsWith('/var/lib/postgresql/data:size=128m')),
+  );
   assert.match(postgres.command.join(' '), /max_connections=16/);
   assert.match(postgres.command.join(' '), /temp_file_limit=16MB/);
-  assert.ok((postgres.volumes as string[]).some((v) => v.includes('init.sql:') && v.endsWith(':ro')));
+  assert.ok(
+    (postgres.volumes as string[]).some((v) => v.includes('init.sql:') && v.endsWith(':ro')),
+  );
   const initSql = generated.committed.get('.lxs/postgres-5433/init.sql') as string;
   assert.ok(initSql.includes('ALTER ROLE postgres NOLOGIN'));
   assert.ok(initSql.includes('GRANT SELECT ON ALL TABLES'));
   assert.ok(!initSql.includes('GRANT INSERT'));
-  assert.equal(doc.networks.ds_trap.driver_opts['com.docker.network.bridge.enable_ip_masquerade'], 'false');
+  assert.equal(
+    doc.networks.ds_trap.driver_opts['com.docker.network.bridge.enable_ip_masquerade'],
+    'false',
+  );
   assert.equal(doc.networks.ds_trap.driver_opts['com.docker.network.bridge.enable_icc'], 'false');
 });
 

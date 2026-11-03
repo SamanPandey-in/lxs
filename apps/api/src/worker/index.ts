@@ -1,19 +1,19 @@
 import type { FastifyBaseLogger } from 'fastify';
 import {
+  type AssessIncidentJob,
   getBoss,
   type NarrateIncidentJob,
-  type AssessIncidentJob,
   type ProcessEventsJob,
   QUEUES,
-  setInProcessNarrator,
   setInProcessAssessor,
+  setInProcessNarrator,
   setInProcessProcessor,
 } from '../jobs/queue.js';
+import { assessIncident } from './assess-incident.js';
 import { loadDetection } from './detection.js';
 import { autoCloseNoise, blocklistExpiry, retentionPurge, sensorStaleness } from './maintenance.js';
 import { llmConfig, narrateIncident } from './narrator.js';
 import { processEvents } from './process-events.js';
-import { assessIncident } from './assess-incident.js';
 
 const timers: NodeJS.Timeout[] = [];
 

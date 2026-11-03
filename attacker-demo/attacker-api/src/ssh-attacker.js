@@ -3,8 +3,8 @@
 // console can "connect" then run several commands in what looks like one
 // shell. No persistence — fine, this is a stage prop (attacker.md §6).
 
-import { Client } from 'ssh2';
 import { randomUUID } from 'node:crypto';
+import { Client } from 'ssh2';
 import { checkAllowed } from './allowlist.js';
 
 const TARGET_SSH_HOST = process.env.TARGET_SSH_HOST || 'localhost';

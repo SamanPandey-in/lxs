@@ -37,7 +37,10 @@ async function main(): Promise<void> {
       .from(users)
       .where(eq(users.username, USERNAME))
       .limit(1);
-    if ((emailOwner && emailOwner.id !== user.id) || (usernameOwner && usernameOwner.id !== user.id)) {
+    if (
+      (emailOwner && emailOwner.id !== user.id) ||
+      (usernameOwner && usernameOwner.id !== user.id)
+    ) {
       throw new Error('The requested Saman username/email belongs to a different account.');
     }
     [user] = await db
@@ -57,7 +60,13 @@ async function main(): Promise<void> {
     .from(memberships)
     .where(eq(memberships.userId, user!.id));
   let org = membershipsForUser.length
-    ? (await db.select().from(organizations).where(eq(organizations.id, membershipsForUser[0]!.orgId)).limit(1))[0]
+    ? (
+        await db
+          .select()
+          .from(organizations)
+          .where(eq(organizations.id, membershipsForUser[0]!.orgId))
+          .limit(1)
+      )[0]
     : undefined;
 
   if (!org) {
@@ -104,7 +113,11 @@ async function main(): Promise<void> {
       .returning();
   }
 
-  const [key] = await db.select({ id: apiKeys.id }).from(apiKeys).where(eq(apiKeys.keyHash, keyHash)).limit(1);
+  const [key] = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(eq(apiKeys.keyHash, keyHash))
+    .limit(1);
   if (!key) {
     await db.insert(apiKeys).values({
       projectId: project!.id,
@@ -117,7 +130,9 @@ async function main(): Promise<void> {
     await db.update(apiKeys).set({ projectId: project!.id }).where(eq(apiKeys.id, key.id));
   }
 
-  console.log(`Saman seed complete: ${USERNAME} (${EMAIL}) owns ${project!.slug} (${project!.id}).`);
+  console.log(
+    `Saman seed complete: ${USERNAME} (${EMAIL}) owns ${project!.slug} (${project!.id}).`,
+  );
   await sql.end();
 }
 

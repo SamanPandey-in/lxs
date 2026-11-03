@@ -12,12 +12,12 @@ import {
   incidents,
   responseActions,
 } from '../db/schema.js';
+import { enqueueNarrate } from '../jobs/queue.js';
 import { audit } from '../lib/audit.js';
 import { conflict, notFound, unavailable } from '../lib/errors.js';
 import { publish } from '../lib/notify.js';
 import { decodeOffset, LimitQuery, pageOf } from '../lib/pagination.js';
 import { parse } from '../lib/parse.js';
-import { enqueueNarrate } from '../jobs/queue.js';
 import {
   compactIncident,
   type IncidentRow,
@@ -121,13 +121,23 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         db
           .select()
           .from(aiSummaries)
-          .where(and(eq(aiSummaries.incidentId, r.id), dsql`coalesce(${aiSummaries.output}->>'assessment', 'false') <> 'true'`))
+          .where(
+            and(
+              eq(aiSummaries.incidentId, r.id),
+              dsql`coalesce(${aiSummaries.output}->>'assessment', 'false') <> 'true'`,
+            ),
+          )
           .orderBy(desc(aiSummaries.createdAt))
           .limit(1),
         db
           .select()
           .from(aiSummaries)
-          .where(and(eq(aiSummaries.incidentId, r.id), dsql`${aiSummaries.output}->>'assessment' = 'true'`))
+          .where(
+            and(
+              eq(aiSummaries.incidentId, r.id),
+              dsql`${aiSummaries.output}->>'assessment' = 'true'`,
+            ),
+          )
           .orderBy(desc(aiSummaries.createdAt))
           .limit(1),
         db.select().from(attackers).where(eq(attackers.id, r.attackerId)).limit(1),
@@ -175,7 +185,13 @@ export async function incidentRoutes(app: FastifyInstance): Promise<void> {
         })),
         ai_summary: out,
         ai_assessment: assessment,
-        ai_kind: assessment ? 'assessment' : latestSummary ? latestSummary.isFallback ? 'template' : 'summary' : null,
+        ai_kind: assessment
+          ? 'assessment'
+          : latestSummary
+            ? latestSummary.isFallback
+              ? 'template'
+              : 'summary'
+            : null,
         // extras for the UI
         floor: r.floor,
         opened_at: iso(r.openedAt),

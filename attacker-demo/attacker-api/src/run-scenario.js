@@ -29,7 +29,11 @@ function sleep(ms, signal) {
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, ms);
-    function done() { clearTimeout(timer); signal?.removeEventListener('abort', done); resolve(); }
+    function done() {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
     signal?.addEventListener('abort', done, { once: true });
   });
 }
@@ -70,7 +74,13 @@ export async function runScenario(scenario, { mode, emit, signal }) {
       emit({ ...frame, atMs: Date.now() - start });
       index += 1;
     }
-    emit({ type: 'done', steps: index, blockedCount, mode: 'safe', ...(signal?.aborted ? { aborted: true } : {}) });
+    emit({
+      type: 'done',
+      steps: index,
+      blockedCount,
+      mode: 'safe',
+      ...(signal?.aborted ? { aborted: true } : {}),
+    });
     return;
   }
 
@@ -189,5 +199,11 @@ export async function runScenario(scenario, { mode, emit, signal }) {
   }
 
   if (sessionId) closeSession(sessionId);
-  emit({ type: 'done', steps: index, blockedCount, mode: 'live', ...(signal?.aborted ? { aborted: true } : {}) });
+  emit({
+    type: 'done',
+    steps: index,
+    blockedCount,
+    mode: 'live',
+    ...(signal?.aborted ? { aborted: true } : {}),
+  });
 }
