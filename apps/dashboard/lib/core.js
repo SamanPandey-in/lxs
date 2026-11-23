@@ -5,7 +5,7 @@
 // the operator set LXS_ALLOW_MOCK=1, only for reads, and only during an outage.
 // Mutations never touch the mock: a block that did not happen must not look like one.
 import { getAllowMock, getApiUrl, loadConfig } from "./config";
-import { PROJECT_ID as MOCK_PROJECT, mock, TECHNIQUES } from "./mock";
+import { PROJECT_ID as MOCK_PROJECT, PROJECT_NAME as MOCK_PROJECT_NAME, mock, TECHNIQUES } from "./mock";
 
 /** The API base. A getter, not a constant: the real value arrives from /api/config
  *  at runtime, so one production build can run against any host. */
@@ -379,6 +379,19 @@ export function resolveProject() {
   return pending;
 }
 
+/** Display name of the active project (for confirm copy), or null when it can't be resolved. */
+export async function activeProjectName() {
+  try {
+    const id = await resolveProject();
+    if (id === MOCK_PROJECT) return MOCK_PROJECT_NAME;
+    const items = list(await tracked("/v1/projects"));
+    const p = items.find((x) => x.id === id);
+    return p?.name || p?.slug || null;
+  } catch {
+    return null;
+  }
+}
+
 export function setActiveProject(projectId) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem("lxs.projectId", projectId);
@@ -416,12 +429,18 @@ const titleCase = (s) =>
     .join(" ");
 const isUuid = (s) => /^[0-9a-f]{8}-[0-9a-f]{4}-/.test(String(s || ""));
 
+/*
+ * Decoy shape: `id` is the record id (the uuid from the API; unique, use it for React keys and
+ * lookups), `key` is the decoy key (`ssh-db-backup-01`, repeats across sensors, matches
+ * `event.decoy_id`, shown in the UI). Mock rows have no uuid, so their id is the key.
+ */
 function normDecoy(d) {
-  if (d.name) return d;
-  const key = d.decoy_key || d.id;
+  const key = d.key || d.decoy_key || d.id;
+  if (d.name) return d.key ? d : { ...d, key };
   return {
     ...d,
-    id: key,
+    id: d.id || key,
+    key,
     name: titleCase(key),
     service: d.service || `${d.type}${d.mount ? `:${d.mount}` : ""}`,
     persona: d.persona || d.type,

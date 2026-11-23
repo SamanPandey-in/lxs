@@ -19,32 +19,54 @@ import {
   User,
 } from "lucide-react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { KillChain } from "@/components/killchain";
 import {
+  Badge,
+  Button,
   Card,
-  Chip,
+  CodeBlock,
   Dropdown,
   EmptyState,
   ErrorState,
   HashChip,
   LabelPill,
-  PageLoading,
-  Pill,
   RuleChip,
   SeverityPill,
   Skeleton,
   StatusPill,
-  TechChip,
+  Tabs,
+  TechList,
 } from "@/components/ui";
 import { BlockModal, describeEvent, RelativeTime, UnblockModal } from "@/components/workspace";
 import { api, PROJECT } from "@/lib/core";
 import { usePolling } from "@/lib/hooks";
-import { EVENT_LABEL, eventTone, ruleName, SEVERITY, STAGE_LABEL } from "@/lib/labels";
+import { EVENT_LABEL, ruleName, SEVERITY, STAGE_LABEL } from "@/lib/labels";
 import { storeActions } from "@/lib/store";
 import { toast } from "@/lib/toast";
-import { clock, csvEscape, downloadBlob, duration, fmtNum, stamp } from "@/lib/utils";
+import { clock, cn, csvEscape, downloadBlob, duration, fmtNum, stamp } from "@/lib/utils";
+
+const SEV_BG = {
+  critical: "bg-sev-critical",
+  high: "bg-sev-high",
+  medium: "bg-sev-medium",
+  low: "bg-sev-low",
+};
+const SEV_BORDER = {
+  critical: "border-l-sev-critical",
+  high: "border-l-sev-high",
+  medium: "border-l-sev-medium",
+  low: "border-l-sev-low",
+};
+
+const DETAIL_TABS = ["timeline", "ledger", "iocs"];
+const TAB_LABEL = { timeline: "Timeline", ledger: "Score ledger", iocs: "IOCs & raw" };
+
+// Everything below the sticky action bar scrolls (and receives focus) clear of it:
+// 48 px topbar + ~56 px action bar ≈ scroll-mt-28 (112 px). On mobile the bar sits at the bottom.
+const CLEAR_STICKY =
+  "[&_a]:scroll-mt-28 [&_button]:scroll-mt-28 [&_li]:scroll-mt-28 [&_section]:scroll-mt-28 max-md:[&_a]:scroll-mb-20 max-md:[&_button]:scroll-mb-20";
 
 function srcOf(e) {
   if (!e.is_decoy) return "app";
@@ -55,13 +77,25 @@ function srcOf(e) {
   return id.split(":")[0] || "decoy";
 }
 
+/** Score facts shared by the summary and the ledger. */
+function scoreFacts(inc) {
+  const raw = inc.detections.reduce((n, d) => n + d.points, 0);
+  const floors = inc.detections.filter((d) => d.floor);
+  const raised = floors.length > 0 && Math.min(100, raw) < inc.score;
+  const top = [...inc.detections]
+    .filter((d) => d.points > 0)
+    .sort((a, b) => b.points - a.points)
+    .slice(0, 3);
+  return { raw, floors, raised, top };
+}
+
 function buildTimeline(events, triggerMap) {
   const out = [];
   events.forEach((e, idx) => {
     const n = idx + 1;
     const prev = out[out.length - 1];
     const groupable = e.event_type === "auth.attempt" && e.outcome === "failure";
-    if (groupable && prev && prev.group) {
+    if (groupable && prev?.group) {
       prev.items.push({ e, n });
       return;
     }
@@ -70,52 +104,76 @@ function buildTimeline(events, triggerMap) {
   return out.map((g) => ({ ...g, trigger: g.items.map((i) => triggerMap[i.e.id]).find(Boolean) }));
 }
 
+/* ───────── Timeline: one line per event ───────── */
 function Timeline({ events, triggerMap }) {
   const rows = useMemo(() => buildTimeline(events, triggerMap), [events, triggerMap]);
   if (!rows.length)
     return (
       <EmptyState icon={FileText} title="No events loaded">
-        The event chain for this incident could not be loaded.
+        The event chain for this incident couldn't be loaded.
       </EmptyState>
     );
   return (
-    <ol className="ds-timeline">
+    <ol className="m-0 list-none p-0">
       {rows.map((g) => {
         const first = g.items[0].e;
-        const multi = g.items.length > 1;
         const last = g.items[g.items.length - 1].e;
+        const multi = g.items.length > 1;
+        const value = multi
+          ? g.items.map((i) => `${i.e.fields.username}/${i.e.fields.password_masked}`).join("  ")
+          : describeEvent(first);
         return (
-          <li key={g.key} data-tone={g.trigger ? "bad" : eventTone(first)} id={`ev-${first.id}`}>
+          <li
+            key={g.key}
+            id={`ev-${first.id}`}
+            className={cn(
+              "flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-l-2 border-b-border px-5 py-2 last:border-b-0 target:bg-muted md:flex-nowrap",
+              g.trigger ? cn(SEV_BORDER[g.trigger.floor], "bg-muted/50") : "border-l-transparent",
+            )}
+          >
             {g.items.slice(1).map((i) => (
-              <span key={i.e.id} id={`ev-${i.e.id}`} />
+              <span key={i.e.id} id={`ev-${i.e.id}`} className="sr-only" />
             ))}
-            <div className="tl-head">
-              <span className="tl-time">{clock(first.occurred_at)}</span>
-              <span className="tl-src">{srcOf(first)}</span>
-              <span className="tl-body">
-                {multi
-                  ? `${g.items.length} failed logins in ${duration(first.occurred_at, last.occurred_at)}`
-                  : EVENT_LABEL[first.event_type] || first.event_type}
-              </span>
-              {first.stage ? (
-                <Chip>{STAGE_LABEL[first.stage]}</Chip>
-              ) : first.is_decoy ? null : (
-                <Chip op="ip">real app</Chip>
+            <time
+              dateTime={first.occurred_at}
+              className="w-16 shrink-0 font-mono text-xs text-muted-foreground tabular-nums"
+            >
+              {clock(first.occurred_at)}
+            </time>
+            <span className="w-10 shrink-0 text-xs text-muted-foreground">{srcOf(first)}</span>
+            <span
+              className={cn(
+                "shrink-0 text-sm",
+                g.trigger || !first.is_decoy ? "font-medium text-foreground" : "text-foreground",
               )}
-            </div>
-            <div className="tl-cmd" title={describeEvent(first)}>
+            >
               {multi
-                ? g.items
-                    .map((i) => `${i.e.fields.username}/${i.e.fields.password_masked}`)
-                    .join("  ")
-                : describeEvent(first)}
-            </div>
+                ? `${g.items.length} failed logins in ${duration(first.occurred_at, last.occurred_at)}`
+                : EVENT_LABEL[first.event_type] || first.event_type}
+            </span>
+            <span
+              translate="no"
+              title={value}
+              className="min-w-0 basis-full truncate font-mono text-xs text-muted-foreground md:flex-1 md:basis-auto"
+            >
+              {value}
+            </span>
             {g.trigger ? (
-              <div className="tl-trigger">
-                <Pill tone="bad" solid>
-                  {g.trigger}
-                </Pill>
-              </div>
+              <Badge
+                variant="tag"
+                tone={g.trigger.floor}
+                title={`${g.trigger.rule} · ${ruleName(g.trigger.rule)}`}
+              >
+                Raised to {SEVERITY[g.trigger.floor].label}
+              </Badge>
+            ) : !first.is_decoy ? (
+              <Badge variant="tag" tone="bad">
+                Real app
+              </Badge>
+            ) : first.stage ? (
+              <span className="hidden shrink-0 text-xs text-muted-foreground lg:inline">
+                {STAGE_LABEL[first.stage]}
+              </span>
             ) : null}
           </li>
         );
@@ -124,209 +182,177 @@ function Timeline({ events, triggerMap }) {
   );
 }
 
+/* ───────── Score ledger ───────── */
 function Ledger({ inc, events }) {
   const idxOf = useMemo(() => Object.fromEntries(events.map((e, i) => [e.id, i + 1])), [events]);
-  let run = 0;
-  const raw = inc.detections.reduce((n, d) => n + d.points, 0);
+  const { raw, floors, raised } = scoreFacts(inc);
   const sev = SEVERITY[inc.severity];
-  const floors = inc.detections.filter((d) => d.floor).map((d) => d.rule_id);
-  const raised = floors.length > 0 && Math.min(100, raw) < inc.score;
+  let run = 0;
   return (
-    <div>
-      <div className="row" style={{ marginBottom: 6 }}>
-        <span className="dim" style={{ fontWeight: 600 }}>
-          Score
-        </span>
-        <span className="spacer" />
-        <span className="num">
-          <strong style={{ fontSize: 14 }}>{inc.score}</strong>
-          <span className="dim"> / 100</span>
-        </span>
-      </div>
-      <div
-        className="score-meter"
-        role="meter"
-        aria-valuenow={inc.score}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-label="Incident score"
-      >
-        <span style={{ width: `${Math.min(100, inc.score)}%` }} />
-      </div>
-      <div className="score-marks">
-        <span>0 · Low</span>
-        <span>40 · Medium</span>
-        <span>50 · High</span>
-        <span>75+ · Critical</span>
+    <div className="flex flex-col gap-4 px-5 py-4">
+      <div>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-sm font-medium text-muted-foreground">Score</span>
+          <span className="tabular-nums">
+            <span className="text-base font-semibold text-foreground">{inc.score}</span>
+            <span className="text-sm text-muted-foreground"> / 100</span>
+          </span>
+        </div>
+        <div
+          role="meter"
+          aria-valuenow={inc.score}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Incident score"
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"
+        >
+          <span
+            className={cn("block h-full rounded-full", SEV_BG[inc.severity])}
+            style={{ width: `${Math.min(100, inc.score)}%` }}
+          />
+        </div>
+        <div className="mt-1.5 flex justify-between gap-2 text-xs text-muted-foreground tabular-nums">
+          <span>0 · Low</span>
+          <span>40 · Medium</span>
+          <span>50 · High</span>
+          <span>75+ · Critical</span>
+        </div>
       </div>
 
-      <div className="ledger" style={{ marginTop: 10 }}>
+      <ol className="m-0 flex list-none flex-col p-0">
         {inc.detections.map((d, i) => {
           run += d.points;
           const shown = Math.min(100, run);
-          const evIdx = d.evidence_event_ids.map((id) => idxOf[id]).filter(Boolean);
+          const evIdx = d.evidence_event_ids.map((eid) => idxOf[eid]).filter(Boolean);
           return (
-            <div
-              className={`ledger-row${d.floor ? " is-floor" : ""}${d.points === 0 ? " is-signal" : ""}`}
+            <li
               key={`${d.rule_id}-${i}`}
+              className="grid grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b border-border py-3 last:border-b-0"
             >
               <div
-                className="ledger-pts"
+                className="text-right tabular-nums"
                 title={
                   d.points === 0
                     ? "Label signal or tag: adds no points"
                     : `Running total ${run}${run > 100 ? " (capped at 100)" : ""}`
                 }
               >
-                {d.points > 0 ? `+${d.points}` : "0"}
-                <small>
+                <div
+                  className={cn(
+                    "text-sm font-semibold",
+                    d.points ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {d.points > 0 ? `+${d.points}` : "0"}
+                </div>
+                <div className="text-xs text-muted-foreground">
                   Σ {shown}
                   {run > 100 ? "*" : ""}
-                </small>
+                </div>
               </div>
-              <div>
-                <div className="ledger-title">
-                  <span>{ruleName(d.rule_id)}</span>
+              <div className="flex min-w-0 flex-col gap-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="text-sm font-medium text-foreground">{ruleName(d.rule_id)}</span>
                   <RuleChip id={d.rule_id} />
                   {d.floor ? (
-                    <Pill tone="bad" solid>
-                      Floor {SEVERITY[d.floor].label.toUpperCase()}
-                    </Pill>
+                    <Badge variant="tag" tone={d.floor}>
+                      Floor: {SEVERITY[d.floor].label}
+                    </Badge>
                   ) : null}
-                  {d.points === 0 ? <Pill tone="halted">no points</Pill> : null}
-                </div>
-                <div className="ledger-reason">{d.reason}</div>
-                <div className="ledger-evidence">
-                  {evIdx.length ? (
-                    <>
-                      <span>Evidence</span>
-                      {evIdx.slice(0, 6).map((n) => (
-                        <a key={n} className="chip" href={`#ev-${events[n - 1].id}`}>
-                          ev #{n}
-                        </a>
-                      ))}
-                      {evIdx.length > 6 ? <span>+{evIdx.length - 6}</span> : null}
-                    </>
-                  ) : null}
-                  {d.techniques.length ? (
-                    <span className="row" style={{ gap: 4, marginLeft: evIdx.length ? 6 : 0 }}>
-                      {d.techniques.map((t) => (
-                        <TechChip key={t.id} id={t.id} link={false} />
-                      ))}
-                    </span>
+                  {d.points === 0 ? (
+                    <Badge variant="tag" tone="neutral">
+                      No points
+                    </Badge>
                   ) : null}
                 </div>
+                <p className="m-0 text-sm text-muted-foreground text-pretty">{d.reason}</p>
+                {evIdx.length || d.techniques.length ? (
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                    {evIdx.length ? (
+                      <>
+                        <span className="text-muted-foreground">Evidence</span>
+                        {evIdx.slice(0, 6).map((n) => (
+                          <Link
+                            key={n}
+                            href={`?tab=timeline#ev-${events[n - 1].id}`}
+                            className="rounded-sm font-mono text-link tabular-nums underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
+                          >
+                            ev #{n}
+                          </Link>
+                        ))}
+                        {evIdx.length > 6 ? (
+                          <span className="text-muted-foreground tabular-nums">
+                            +{evIdx.length - 6}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : null}
+                    {d.techniques.length ? (
+                      <TechList ids={d.techniques.map((t) => t.id)} link={false} />
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-            </div>
+            </li>
           );
         })}
-      </div>
-      <div
-        className="reason-box"
-        data-tone={
-          inc.severity === "critical" ? "bad" : inc.severity === "high" ? "drift" : undefined
-        }
-        style={{ marginTop: 12 }}
-      >
-        <strong>
-          {raw} raw points{raw > 100 ? " · capped at 100*" : ""}
-        </strong>
-        {raised ? (
-          <>
-            {" "}
-            {"→"} score raised to {inc.score} by the {sev.label.toUpperCase()} floor
-          </>
-        ) : null}
-        {floors.length && !raised ? (
-          <>
-            {" "}
-            · floor {sev.label.toUpperCase()} from {floors.join(", ")}
-          </>
-        ) : null}
-        {" → "}
-        <strong>{sev.label.toUpperCase()}</strong>, label <strong>{inc.label}</strong>.
-        <div className="dim" style={{ marginTop: 3, fontSize: 12 }}>
+      </ol>
+
+      <div className="rounded-lg bg-muted/50 px-4 py-3 text-sm text-foreground">
+        <p className="m-0">
+          <span className="font-medium tabular-nums">
+            {raw} raw points{raw > 100 ? " · capped at 100*" : ""}
+          </span>
+          {raised ? ` → raised to ${inc.score} by the ${sev.label.toLowerCase()} floor` : ""}
+          {floors.length && !raised
+            ? ` · ${sev.label.toLowerCase()} floor from ${floors.map((d) => d.rule_id).join(", ")}`
+            : ""}
+          {" → "}
+          <span className="font-medium">{sev.label}</span>, label{" "}
+          <span className="font-medium">{inc.label}</span>.
+        </p>
+        <p className="m-0 mt-1 text-xs text-muted-foreground">
           {raw > 100 ? "* marks detections scored past the 100-point cap. " : ""}
           Points are additive and deterministic. The AI summary only narrates this ledger; it never
           changes the score.
-        </div>
+        </p>
       </div>
     </div>
   );
 }
 
-function AttackerCard({ inc, attacker, events }) {
+/* ───────── IOCs and raw evidence ───────── */
+function Fact({ label, children, mono }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd
+        className={cn(
+          "m-0 truncate text-sm text-foreground tabular-nums",
+          mono && "font-mono",
+        )}
+      >
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+function SubHeading({ children }) {
+  return (
+    <h3 className="m-0 mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      {children}
+    </h3>
+  );
+}
+
+function Evidence({ inc, attacker, events }) {
+  const [allCmds, setAllCmds] = useState(false);
+  const [raw, setRaw] = useState(false);
   const cad = attacker?.cadence;
   const assets = [
     ...new Set(events.filter((e) => !e.is_decoy && e.fields?.asset).map((e) => e.fields.asset)),
   ];
-  return (
-    <Card
-      title="Attacker profile"
-      right={
-        attacker ? (
-          <Link href={`/attackers/${attacker.id}`} className="btn btn-sm btn-ghost">
-            Full profile
-          </Link>
-        ) : null
-      }
-    >
-      <dl className="ds-facts">
-        <div>
-          <dt>Source</dt>
-          <dd className="mono">{inc.src_ip}</dd>
-        </div>
-        <div>
-          <dt>Cadence</dt>
-          <dd>
-            {cad ? (
-              <Pill tone={cad === "human" ? "bad" : "drift"} icon={cad === "human" ? User : Bot}>
-                {cad === "human" ? "Human" : cad === "bot" ? "Bot" : "Unknown"}
-              </Pill>
-            ) : (
-              "—"
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Sessions</dt>
-          <dd>{attacker ? attacker.session_count : "—"}</dd>
-        </div>
-        <div>
-          <dt>Events</dt>
-          <dd>{attacker ? fmtNum(attacker.event_count) : fmtNum(inc.event_count)}</dd>
-        </div>
-        <div>
-          <dt>Client banner</dt>
-          <dd className="mono">{attacker?.fingerprints?.client_banner || "—"}</dd>
-        </div>
-        <div>
-          <dt>Origin</dt>
-          <dd>{attacker?.fingerprints?.country || "—"}</dd>
-        </div>
-      </dl>
-      <div className="ds-section" style={{ marginTop: 14 }}>
-        <h3>Decoys touched</h3>
-        <div className="row-wrap" style={{ gap: 6 }}>
-          {(attacker?.decoys_touched || []).map((d) => (
-            <Pill key={d} tone="cache" icon={Network}>
-              {d}
-            </Pill>
-          ))}
-          {assets.map((a) => (
-            <Pill key={a} tone="bad" icon={Coins}>
-              {a} (real)
-            </Pill>
-          ))}
-          {!attacker ? <Skeleton w={160} /> : null}
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-function EvidenceCard({ attacker, events }) {
-  const [more, setMore] = useState(false);
   const cmds = [...new Set(events.filter((e) => e.fields?.command).map((e) => e.fields.command))];
   const creds = events
     .filter((e) => e.event_type === "auth.attempt")
@@ -339,87 +365,164 @@ function EvidenceCard({ attacker, events }) {
   const files = [
     ...new Set(events.filter((e) => e.fields?.file_name).map((e) => e.fields.file_name)),
   ];
-  const shown = more ? cmds : cmds.slice(0, 5);
   return (
-    <Card
-      title="Commands, credentials, files"
-      sub="Attacker-supplied text. Rendered as data, never executed."
-    >
-      <div className="detail-stack" style={{ gap: 14 }}>
-        <div className="ds-section">
-          <h3>Commands run ({cmds.length})</h3>
-          {cmds.length === 0 ? (
-            <span className="dim">No shell commands.</span>
+    <div className="flex flex-col gap-6 px-5 py-4">
+      <section aria-labelledby="ev-attacker">
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <h3
+            id="ev-attacker"
+            className="m-0 text-xs font-medium tracking-wide text-muted-foreground uppercase"
+          >
+            Attacker
+          </h3>
+          {attacker ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              render={<Link href={`/attackers/${attacker.id}`} />}
+              nativeButton={false}
+            >
+              Full profile
+            </Button>
+          ) : null}
+        </div>
+        <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
+          <Fact label="Source" mono>
+            <span translate="no">{inc.src_ip}</span>
+          </Fact>
+          <Fact label="Cadence">
+            {cad ? (
+              <Badge variant="tag" tone="neutral">
+                {cad === "human" ? <User aria-hidden /> : <Bot aria-hidden />}
+                {cad === "human" ? "Human" : cad === "bot" ? "Bot" : "Unknown"}
+              </Badge>
+            ) : (
+              "—"
+            )}
+          </Fact>
+          <Fact label="Sessions">{attacker ? fmtNum(attacker.session_count) : "—"}</Fact>
+          <Fact label="Events">
+            {attacker ? fmtNum(attacker.event_count) : fmtNum(inc.event_count)}
+          </Fact>
+          <Fact label="Client banner" mono>
+            {attacker?.fingerprints?.client_banner || "—"}
+          </Fact>
+          <Fact label="Origin">{attacker?.fingerprints?.country || "—"}</Fact>
+        </dl>
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-xs text-muted-foreground">Touched</span>
+          {(attacker?.decoys_touched || []).map((d) => (
+            <Badge key={d} variant="tag" tone="info">
+              <Network aria-hidden />
+              {d}
+            </Badge>
+          ))}
+          {assets.map((a) => (
+            <Badge key={a} variant="tag" tone="bad">
+              <Coins aria-hidden />
+              {a} (real asset)
+            </Badge>
+          ))}
+          {!attacker ? <Skeleton w={160} h={20} /> : null}
+        </div>
+      </section>
+
+      <section aria-labelledby="ev-cmds">
+        <SubHeading>
+          <span id="ev-cmds">
+            Commands run <span className="tabular-nums">({cmds.length})</span>
+          </span>
+        </SubHeading>
+        {cmds.length === 0 ? (
+          <p className="m-0 text-sm text-muted-foreground">No shell commands.</p>
+        ) : (
+          <>
+            <p className="m-0 mb-2 text-xs text-muted-foreground">
+              Attacker-supplied text. Rendered as data, never executed.
+            </p>
+            <CodeBlock
+              label="Commands run"
+              value={(allCmds ? cmds : cmds.slice(0, 5)).map((c) => `$ ${c}`).join("\n")}
+            />
+            {cmds.length > 5 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mt-1"
+                aria-expanded={allCmds}
+                onClick={() => setAllCmds(!allCmds)}
+              >
+                {allCmds ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+                {allCmds ? "Show fewer" : `Show all ${cmds.length} commands`}
+              </Button>
+            ) : null}
+          </>
+        )}
+      </section>
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <section aria-labelledby="ev-creds">
+          <SubHeading>
+            <span id="ev-creds">Credentials tried (masked)</span>
+          </SubHeading>
+          {creds.length ? (
+            <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0">
+              {creds.slice(0, 12).map((c) => (
+                <li key={c.k} className="font-mono text-xs text-foreground" translate="no">
+                  {c.text}
+                  {c.n > 1 ? <span className="tabular-nums"> ×{c.n}</span> : null}{" "}
+                  <span className={c.ok ? "text-ok" : "text-muted-foreground"}>
+                    {c.ok ? "✔ accepted" : "✘ rejected"}
+                  </span>
+                </li>
+              ))}
+              {creds.length > 12 ? (
+                <li className="text-xs text-muted-foreground tabular-nums">
+                  +{creds.length - 12} more
+                </li>
+              ) : null}
+            </ul>
           ) : (
-            <ul className="ds-list">
-              {shown.map((c) => (
-                <li key={c}>
-                  <code
-                    className="code"
-                    style={{ padding: "2px 8px", maxWidth: "100%", overflowX: "auto" }}
-                  >
-                    {c.length > 90 && !more ? `${c.slice(0, 90)}…` : c}
-                  </code>
+            <p className="m-0 text-sm text-muted-foreground">None.</p>
+          )}
+        </section>
+        <section aria-labelledby="ev-files">
+          <SubHeading>
+            <span id="ev-files">Files touched</span>
+          </SubHeading>
+          {files.length ? (
+            <ul className="m-0 flex list-none flex-wrap gap-x-4 gap-y-1 p-0">
+              {files.map((f) => (
+                <li key={f} className="font-mono text-xs text-foreground" translate="no">
+                  {f}
                 </li>
               ))}
             </ul>
+          ) : (
+            <p className="m-0 text-sm text-muted-foreground">None.</p>
           )}
-          {cmds.length > 5 ? (
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              style={{ alignSelf: "flex-start" }}
-              onClick={() => setMore(!more)}
-            >
-              {more ? (
-                <>
-                  <ChevronUp /> Show less
-                </>
-              ) : (
-                <>
-                  <ChevronDown /> Show {cmds.length - 5} more
-                </>
-              )}
-            </button>
-          ) : null}
-        </div>
-        <div className="ds-section">
-          <h3>Credentials tried (masked)</h3>
-          <div className="row-wrap" style={{ gap: 6 }}>
-            {creds.length ? (
-              creds.slice(0, 12).map((c) => (
-                <span
-                  key={c.k}
-                  className="chip"
-                  data-op={c.ok ? "rule" : undefined}
-                  title={c.ok ? "Accepted" : "Rejected"}
-                >
-                  {c.text}
-                  {c.n > 1 ? ` ×${c.n}` : ""} {c.ok ? "✔" : "✘"}
-                </span>
-              ))
-            ) : (
-              <span className="dim">None.</span>
-            )}
-          </div>
-        </div>
-        <div className="ds-section">
-          <h3>Files touched</h3>
-          <div className="row-wrap" style={{ gap: 6 }}>
-            {files.length ? (
-              files.map((f) => <Chip key={f}>{f}</Chip>)
-            ) : (
-              <span className="dim">None.</span>
-            )}
-          </div>
-        </div>
+        </section>
       </div>
-    </Card>
+
+      <section aria-labelledby="ev-raw">
+        <div className="flex items-center justify-between gap-3">
+          <SubHeading>
+            <span id="ev-raw">
+              Raw events <span className="tabular-nums">({events.length})</span>
+            </span>
+          </SubHeading>
+          <Button variant="ghost" size="sm" aria-expanded={raw} onClick={() => setRaw(!raw)}>
+            {raw ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+            {raw ? "Hide raw events" : "Show raw events"}
+          </Button>
+        </div>
+        {raw ? <CodeBlock label="Raw events (JSON)" value={events} /> : null}
+      </section>
+    </div>
   );
 }
 
-// Primary actions, pinned below the top bar so Block/Export/Resolve are always one
-// click away — never buried under the AI summary (IMPR P1).
+/* ───────── Actions (sticky) ───────── */
 function IncidentActions({
   inc,
   blocked,
@@ -434,28 +537,28 @@ function IncidentActions({
   const isOpen = inc.status === "open";
   const closed = inc.status === "resolved" || inc.status === "false_positive";
   return (
-    <div className="incident-actions" role="group" aria-label="Incident actions">
+    <div
+      role="toolbar"
+      aria-label="Incident actions"
+      className="z-10 -mx-4 flex min-w-0 flex-wrap items-center gap-2 border-border bg-background px-4 py-2 max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:mx-0 max-md:border-t md:sticky md:top-12 md:-mx-6 md:border-b md:px-6"
+    >
       {blocked ? (
         <>
-          <Pill
-            tone={blocked.status === "applied" ? "ok" : "drift"}
-            icon={blocked.status === "applied" ? ShieldCheck : Loader2}
-            large
-          >
+          <Badge variant="status" tone={blocked.status === "applied" ? "ok" : "warn"}>
             {blocked.status === "applied"
               ? blocked.total_sensors
                 ? `Blocked · applied on ${blocked.applied_sensors}/${blocked.total_sensors} sensors`
                 : "Blocked · enforced"
-              : "Block pending… pushing to sensors"}
-          </Pill>
-          <button type="button" className="btn" onClick={onUnblock}>
-            <ShieldCheck /> Unblock
-          </button>
+              : "Block pending · pushing to sensors…"}
+          </Badge>
+          <Button variant="outline" onClick={onUnblock}>
+            <ShieldCheck aria-hidden /> Unblock…
+          </Button>
         </>
       ) : (
-        <button type="button" className="btn btn-danger" onClick={onBlock} disabled={busy}>
-          <ShieldBan /> Block source · 24 h
-        </button>
+        <Button variant="destructive" onClick={onBlock} disabled={busy}>
+          <ShieldBan aria-hidden /> Block source…
+        </Button>
       )}
       <Dropdown
         label="Export IOCs"
@@ -466,11 +569,11 @@ function IncidentActions({
           { label: "STIX 2.1", onClick: () => onExport("stix") },
         ]}
       />
-      <span className="spacer" />
+      <span className="flex-1" />
       {isOpen ? (
-        <button type="button" className="btn" onClick={onAck} disabled={busy}>
-          <CheckCheck /> Acknowledge
-        </button>
+        <Button variant="outline" onClick={onAck} disabled={busy}>
+          <CheckCheck aria-hidden /> Acknowledge
+        </Button>
       ) : null}
       {!closed ? (
         <Dropdown
@@ -488,181 +591,236 @@ function IncidentActions({
   );
 }
 
-function AiBand({ inc, onNarrate, narrating }) {
+/* ───────── Summary: AI narrative + why this severity ───────── */
+function AiStatus({ inc, ai, pending, generatingSummary, generatingAssessment }) {
+  return (
+    <span className="flex flex-wrap items-center gap-2">
+      {ai ? (
+        ai.is_fallback ? (
+          <Badge
+            variant="outline"
+            title="LLM unavailable or declined: this summary was filled from the detection ledger by a deterministic template."
+          >
+            Template
+          </Badge>
+        ) : (
+          <Badge variant="tag" tone="brand">
+            <Sparkles aria-hidden /> AI-generated
+          </Badge>
+        )
+      ) : pending ? (
+        <Badge variant="tag" tone="warn">
+          <Loader2 aria-hidden className="motion-safe:animate-spin" /> Generating…
+        </Badge>
+      ) : (
+        <Badge variant="tag" tone="neutral">
+          Unavailable
+        </Badge>
+      )}
+      {generatingSummary ? (
+        <Badge variant="tag" tone="warn">
+          <Loader2 aria-hidden className="motion-safe:animate-spin" /> LLM generating…
+        </Badge>
+      ) : null}
+      {generatingAssessment ? (
+        <Badge variant="tag" tone="warn">
+          <Loader2 aria-hidden className="motion-safe:animate-spin" /> Assessing novel activity…
+        </Badge>
+      ) : null}
+      {inc.ai_status === "error" ? (
+        <Badge variant="tag" tone="neutral">
+          Advisory assessment unavailable
+        </Badge>
+      ) : null}
+    </span>
+  );
+}
+
+function Summary({ inc, onNarrate, narrating }) {
   const ai = inc.ai_summary;
   const assessment = inc.ai_assessment;
   const pending = !ai && (inc.ai_status === "pending" || !inc.ai_status);
   const generatingSummary = !!ai?.is_fallback && ["pending", "generating"].includes(inc.ai_status);
   const generatingAssessment = inc.ai_status === "generating" && !assessment;
   const failed = !ai && ["failed", "error"].includes(inc.ai_status);
+  const { raw, floors, raised, top } = scoreFacts(inc);
+  const sev = SEVERITY[inc.severity];
   return (
-    <section className="ds-card ai-band" aria-label="AI summary">
-      <div
-        className="reason-box"
-        data-tone={inc.severity === "critical" ? "bad" : undefined}
-        style={{ border: 0, padding: 0, background: "none" }}
-      >
+    <Card
+      title="Summary"
+      right={
+        <AiStatus
+          inc={inc}
+          ai={ai}
+          pending={pending}
+          generatingSummary={generatingSummary}
+          generatingAssessment={generatingAssessment}
+        />
+      }
+    >
+      <div className="flex flex-col gap-5">
         {assessment ? (
-          <div className="reason-box" style={{ marginBottom: 16 }}>
-            <div className="row" style={{ marginBottom: 8, gap: 10 }}>
-              <span className="ai-label">
-                <Sparkles size={13} /> AI-flagged novel behaviour
+          <div className="rounded-lg bg-muted/50 px-4 py-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Sparkles className="size-4 text-primary" aria-hidden /> AI-flagged novel behaviour
               </span>
-              <Pill tone="brand">Advisory</Pill>
+              <Badge variant="outline">Advisory</Badge>
               <SeverityPill severity={assessment.suggested_severity} />
-              <span className="dim" style={{ fontSize: 12 }}>
+              <span className="text-xs text-muted-foreground tabular-nums">
                 Suggested {assessment.suggested_label} · {Math.round(assessment.confidence * 100)}%
                 confidence · deterministic score unchanged
               </span>
             </div>
-            <p style={{ fontWeight: 650 }}>{assessment.novel_behaviour}</p>
-            <p className="dim">{assessment.rationale}</p>
+            <p className="m-0 text-sm font-medium text-foreground">{assessment.novel_behaviour}</p>
+            <p className="m-0 mt-1 text-sm text-muted-foreground">{assessment.rationale}</p>
             {assessment.suggested_techniques.length ? (
-              <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
-                {assessment.suggested_techniques.map((t) => (
-                  <Chip key={t}>{t}</Chip>
-                ))}
-              </div>
+              <TechList ids={assessment.suggested_techniques} link={false} className="mt-2" />
             ) : null}
             {assessment.recommended_actions.length ? (
-              <div className="row-wrap" style={{ gap: 6, marginTop: 8 }}>
+              <ul className="m-0 mt-2 flex list-none flex-wrap gap-1.5 p-0">
                 {assessment.recommended_actions.map((a) => (
-                  <Chip key={a}>{a.replaceAll("_", " ")}</Chip>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : generatingAssessment ? (
-          <p className="dim" style={{ marginBottom: 12 }}>
-            AI is assessing uncovered activity. Its result is advisory and cannot change the rule
-            score or trigger containment.
-          </p>
-        ) : null}
-        <div className="row" style={{ marginBottom: 8, gap: 10 }}>
-          <span className="ai-label">
-            <Sparkles size={13} /> AI summary
-          </span>
-          {ai ? (
-            ai.is_fallback ? (
-              <Pill
-                tone="halted"
-                title="LLM unavailable or declined: this summary was filled from the detection ledger by a deterministic template."
-              >
-                Template
-              </Pill>
-            ) : (
-              <Pill tone="brand">AI-generated</Pill>
-            )
-          ) : pending ? (
-            <Pill tone="drift" icon={Loader2}>
-              Generating…
-            </Pill>
-          ) : (
-            <Pill tone="halted">Unavailable</Pill>
-          )}
-          {generatingSummary ? (
-            <Pill tone="drift" icon={Loader2}>
-              LLM generating
-            </Pill>
-          ) : null}
-          {generatingAssessment ? (
-            <Pill tone="drift" icon={Loader2}>
-              Assessing novel activity
-            </Pill>
-          ) : null}
-          {inc.ai_status === "error" ? (
-            <Pill tone="halted">Advisory assessment unavailable</Pill>
-          ) : null}
-          <span className="dim" style={{ fontSize: 12 }}>
-            Narrates the ledger, never changes the score.
-          </span>
-          {(ai?.is_fallback || failed) && onNarrate ? (
-            <button type="button" className="btn btn-sm" disabled={narrating} onClick={onNarrate}>
-              {narrating ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
-              {narrating ? "Generating…" : "Try AI summary again"}
-            </button>
-          ) : null}
-        </div>
-        {ai ? (
-          <div className="grid-2" style={{ gap: 18 }}>
-            <div className="col" style={{ gap: 6 }}>
-              <div style={{ fontWeight: 650, fontSize: 14.5, lineHeight: 1.35 }}>{ai.headline}</div>
-              <p>{ai.what_happened}</p>
-              {ai.why_it_matters ? (
-                <p className="dim">
-                  <strong style={{ color: "var(--text)" }}>Why it matters:</strong>{" "}
-                  {ai.why_it_matters}
-                </p>
-              ) : null}
-            </div>
-            <div>
-              <div
-                className="field-label"
-                style={{
-                  marginBottom: 6,
-                  fontSize: 11.5,
-                  fontWeight: 650,
-                  textTransform: "uppercase",
-                  letterSpacing: ".05em",
-                  color: "var(--text-dim)",
-                }}
-              >
-                Recommended actions
-              </div>
-              <ul className="ds-list" style={{ gap: 7 }}>
-                {ai.recommended_actions.map((a, i) => (
-                  <li key={i}>
-                    <span className="chip" style={{ flex: "none" }}>
-                      {i + 1}
-                    </span>
-                    <span>{a}</span>
+                  <li key={a}>
+                    <Badge variant="tag" tone="neutral">
+                      {a.replaceAll("_", " ")}
+                    </Badge>
                   </li>
                 ))}
               </ul>
+            ) : null}
+          </div>
+        ) : generatingAssessment ? (
+          <p className="m-0 text-sm text-muted-foreground">
+            AI is assessing uncovered activity. Its result is advisory and can't change the rule
+            score or trigger containment.
+          </p>
+        ) : null}
+
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+          <div className="flex min-w-0 flex-col gap-2">
+            {ai ? (
+              <>
+                <p className="m-0 text-base font-medium text-foreground text-balance">
+                  {ai.headline}
+                </p>
+                <p className="m-0 max-w-[70ch] text-sm text-foreground text-pretty">
+                  {ai.what_happened}
+                </p>
+                {ai.why_it_matters ? (
+                  <p className="m-0 max-w-[70ch] text-sm text-muted-foreground text-pretty">
+                    <span className="font-medium text-foreground">Why it matters:</span>{" "}
+                    {ai.why_it_matters}
+                  </p>
+                ) : null}
+              </>
+            ) : pending ? (
+              <div className="flex flex-col gap-2" aria-busy="true">
+                <Skeleton w="70%" h={16} />
+                <Skeleton w="95%" />
+                <Skeleton w="88%" />
+                <span className="text-xs text-muted-foreground">
+                  The evidence on this page is complete. The narrative arrives in a few seconds, or a
+                  template is used if the LLM is down.
+                </span>
+              </div>
+            ) : (
+              <p className="m-0 text-sm text-muted-foreground">
+                {failed
+                  ? "Narration failed for this incident. The score ledger is the source of truth."
+                  : "No summary available."}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-xs text-muted-foreground">
+                Narrates the ledger, never changes the score.
+              </span>
+              {(ai?.is_fallback || failed) && onNarrate ? (
+                <Button variant="outline" size="sm" loading={narrating} onClick={onNarrate}>
+                  <Sparkles aria-hidden /> Try AI summary again
+                </Button>
+              ) : null}
             </div>
           </div>
-        ) : pending ? (
-          <div className="col" style={{ gap: 8 }}>
-            <Skeleton w="70%" h={16} />
-            <Skeleton w="95%" />
-            <Skeleton w="88%" />
-            <span className="dim" style={{ fontSize: 12 }}>
-              The deterministic evidence on this page is complete; the narrative arrives in a few
-              seconds, or a template is used if the LLM is down.
-            </span>
+
+          <div className="flex min-w-0 flex-col gap-4">
+            {ai?.recommended_actions?.length ? (
+              <div>
+                <SubHeading>Recommended actions</SubHeading>
+                <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-sm text-foreground marker:text-muted-foreground">
+                  {ai.recommended_actions.map((a, i) => (
+                    // biome-ignore lint/suspicious/noArrayIndexKey: ordered, static per render
+                    <li key={i}>{a}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+            <div>
+              <SubHeading>Why {sev.label.toLowerCase()}</SubHeading>
+              <p className="m-0 text-sm text-foreground tabular-nums">
+                {raw} points from {inc.detections.length} detection
+                {inc.detections.length === 1 ? "" : "s"}
+                {raised
+                  ? `, raised to ${inc.score} by the ${sev.label.toLowerCase()} floor`
+                  : floors.length
+                    ? `, with a ${sev.label.toLowerCase()} floor`
+                    : ""}
+                .
+              </p>
+              {top.length ? (
+                <ul className="m-0 mt-1.5 flex list-none flex-col gap-0.5 p-0 text-sm">
+                  {top.map((d, i) => (
+                    <li key={`${d.rule_id}-${i}`} className="flex min-w-0 items-baseline gap-2">
+                      <span className="w-8 shrink-0 text-right font-medium tabular-nums">
+                        +{d.points}
+                      </span>
+                      <span className="truncate text-muted-foreground">{ruleName(d.rule_id)}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <Link
+                href="?tab=ledger#detail-tabs"
+                className="mt-2 inline-block rounded-sm text-sm text-link underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Open score ledger
+              </Link>
+            </div>
           </div>
-        ) : (
-          <p className="dim">
-            {failed
-              ? "Narration failed for this incident. The ledger above is the source of truth."
-              : "No summary available."}
-          </p>
-        )}
+        </div>
       </div>
-    </section>
+    </Card>
   );
 }
 
+/* ───────── Audit trail ───────── */
 function AuditTrail({ rows, number, incidentId }) {
   const mine = rows
     .filter((r) => r.target.includes(`#${number}`) || r.metadata?.incident_id === incidentId)
     .slice(0, 6);
   return (
-    <Card title="This incident's audit trail" sub="One click to act, one row in the audit log">
+    <Card title="Audit trail" sub="Every action on this incident" flush>
       {mine.length === 0 ? (
-        <span className="dim">
-          No actions taken yet. Block, acknowledge or resolve and the row appears here.
-        </span>
+        <p className="m-0 px-5 pb-5 text-sm text-muted-foreground">
+          No actions yet. Block, acknowledge or resolve and the entry appears here.
+        </p>
       ) : (
-        <ul className="ds-list">
+        <ul className="m-0 list-none border-t border-border p-0">
           {mine.map((r) => (
-            <li key={r.id} style={{ flexWrap: "wrap" }}>
-              <span className="mono dim" style={{ minWidth: 112 }}>
+            <li
+              key={r.id}
+              className="flex min-w-0 items-center gap-3 border-b border-border px-5 py-2 last:border-b-0"
+            >
+              <span className="w-28 shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                 {stamp(r.at)}
               </span>
-              <Pill tone={r.action === "block_ip" ? "bad" : "cache"}>{r.action}</Pill>
-              <span className="dim">{r.actor}</span>
-              <span className="faint mono truncate" style={{ maxWidth: 260 }}>
+              <Badge variant="tag" tone={r.action === "block_ip" ? "bad" : "info"}>
+                {r.action.replaceAll("_", " ")}
+              </Badge>
+              <span className="shrink-0 text-sm text-foreground">{r.actor}</span>
+              <span
+                className="hidden min-w-0 truncate font-mono text-xs text-muted-foreground md:inline"
+                title={JSON.stringify(r.metadata)}
+              >
                 {JSON.stringify(r.metadata)}
               </span>
             </li>
@@ -720,8 +878,49 @@ function exportIocs(iocs, fmt, number) {
   );
 }
 
-export default function IncidentDetailPage() {
+function BackLink() {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="-ml-2 self-start"
+      render={<Link href="/incidents" />}
+      nativeButton={false}
+    >
+      <ArrowLeft aria-hidden /> Incidents
+    </Button>
+  );
+}
+
+function DetailSkeleton() {
+  return (
+    <div role="status" aria-live="polite" className="ds-page">
+      <span className="sr-only">Loading incident</span>
+      <Skeleton h={28} w={120} />
+      <Card>
+        <div className="flex flex-col gap-3">
+          <Skeleton h={32} w="min(560px, 80%)" />
+          <Skeleton h={20} w={280} />
+          <Skeleton h={36} w="min(640px, 100%)" />
+        </div>
+      </Card>
+      <Card>
+        <div className="flex flex-col gap-2">
+          <Skeleton h={16} w="60%" />
+          <Skeleton w="95%" />
+          <Skeleton w="88%" />
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function IncidentDetail() {
   const { id } = useParams();
+  const sp = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const tab = DETAIL_TABS.includes(sp.get("tab")) ? sp.get("tab") : "timeline";
   const [blockOpen, setBlockOpen] = useState(false);
   const [unblockOpen, setUnblockOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -748,39 +947,33 @@ export default function IncidentDetailPage() {
     [id],
   );
 
+  // Event id → the severity floor it triggered (highlighted in the timeline).
   const triggerMap = useMemo(() => {
     const m = {};
-    (data?.inc.detections || [])
-      .filter((d) => d.floor)
-      .forEach((d) =>
-        d.evidence_event_ids.forEach((eid) => {
-          m[eid] = `Triggered ${SEVERITY[d.floor].label.toUpperCase()} floor · ${d.rule_id}`;
-        }),
-      );
+    for (const d of data?.inc.detections || []) {
+      if (!d.floor) continue;
+      for (const eid of d.evidence_event_ids) m[eid] = { floor: d.floor, rule: d.rule_id };
+    }
     return m;
   }, [data]);
 
-  if (loading && !data)
-    return (
-      <div className="ds-page">
-        <PageLoading label="Loading incident…" />
-      </div>
-    );
+  const inc = data?.inc;
+  useEffect(() => {
+    if (inc) document.title = `Incident #${inc.number} · ${SEVERITY[inc.severity]?.label} · LXS`;
+  }, [inc]);
+
+  if (loading && !data) return <DetailSkeleton />;
   if (error && !data)
     return (
       <div className="ds-page">
-        <Link
-          href="/incidents"
-          className="btn btn-sm btn-ghost"
-          style={{ alignSelf: "flex-start" }}
-        >
-          <ArrowLeft /> Incident queue
-        </Link>
-        <ErrorState error={error} onRetry={reload} />
+        <BackLink />
+        <Card>
+          <ErrorState error={error} onRetry={reload} what="this incident" />
+        </Card>
       </div>
     );
 
-  const { inc, events, attacker, blocklist, audit } = data;
+  const { events, attacker, blocklist, audit } = data;
   const blocked =
     blocklist.find(
       (b) =>
@@ -801,6 +994,15 @@ export default function IncidentDetailPage() {
   ];
   const token = events.find((e) => e.event_type === "honeytoken.use")?.fields?.token;
   const sev = SEVERITY[inc.severity];
+  const reached = inc.stages.length;
+
+  const setTab = (v) => {
+    const next = new URLSearchParams(sp.toString());
+    if (v === "timeline") next.delete("tab");
+    else next.set("tab", v);
+    const s = next.toString();
+    router.replace(s ? `${pathname}?${s}` : pathname, { scroll: false });
+  };
 
   const act = async (fn, okMsg, okDesc) => {
     setBusy(true);
@@ -842,90 +1044,112 @@ export default function IncidentDetailPage() {
   };
 
   return (
-    <div className="ds-page">
-      <Link
-        href="/incidents"
-        className="btn btn-sm btn-ghost"
-        style={{ alignSelf: "flex-start", marginBottom: -8 }}
-      >
-        <ArrowLeft /> Incident queue
-      </Link>
+    <div className="ds-page max-md:pb-16">
+      <BackLink />
 
-      {/* WHO · WHAT · HOW FAR · HOW BAD */}
-      <section className="ds-card hero-header" data-sev={inc.severity} aria-label="Incident header">
-        <div className="row" style={{ alignItems: "flex-start", gap: 20, flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 280 }}>
-            <div className="ds-title">
-              <span className="ds-eyebrow" style={{ margin: 0 }}>
-                Incident #{inc.number}
-              </span>
-              <SeverityPill severity={inc.severity} large />
-              <LabelPill label={inc.label} large />
+      {/* What · how bad · key facts */}
+      <Card>
+        <div className="flex min-w-0 flex-col gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="text-sm text-muted-foreground tabular-nums">
+              Incident #{inc.number}
+            </span>
+            <h1 className="m-0 text-2xl font-semibold tracking-[-0.01em] text-balance text-foreground">
+              {inc.title}
+            </h1>
+          </div>
+
+          <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+            <span className="flex shrink-0 flex-nowrap items-center gap-2">
+              <SeverityPill severity={inc.severity} />
+              <LabelPill label={inc.label} />
               <StatusPill status={inc.status} />
-            </div>
-            <h1 style={{ marginTop: 8, fontSize: 21 }}>{inc.title}</h1>
-            <div className="row-wrap dim" style={{ marginTop: 8, gap: 14, fontSize: 12.5 }}>
-              <span className="row" style={{ gap: 6 }}>
-                Source <HashChip hash={inc.src_ip} />
-              </span>
-              <span>
-                first <strong style={{ color: "var(--text)" }}>{clock(inc.first_event_at)}</strong>
-              </span>
-              <span>
-                last <strong style={{ color: "var(--text)" }}>{clock(inc.last_event_at)}</strong> (
-                <RelativeTime iso={inc.last_event_at} />)
-              </span>
-              <span>
-                dwell{" "}
-                <strong style={{ color: "var(--text)" }}>
-                  {duration(inc.first_event_at, inc.last_event_at)}
-                </strong>
-              </span>
-              <span>{fmtNum(inc.event_count)} events</span>
-            </div>
-          </div>
-          <div style={{ minWidth: 150, textAlign: "right" }}>
-            <div className="score-big" style={{ color: `var(--sev-${inc.severity})` }}>
-              {inc.score}
-              <span className="dim" style={{ fontSize: 15, fontWeight: 500 }}>
-                /100
-              </span>
-            </div>
-            <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>
-              {sev.hint}
-            </div>
-          </div>
-        </div>
-
-        <KillChain stages={inc.stages} severity={inc.severity} />
-
-        <div className="row-wrap" style={{ gap: 10 }}>
-          {inc.real_asset_reached ? (
-            <span className="badge-callout">
-              <Coins /> REAL ASSET REACHED{assets.length ? `: ${assets.join(", ")}` : ""}
             </span>
-          ) : null}
-          {inc.honeytoken_used ? (
-            <span className="badge-callout">
-              <KeyRound /> HONEYTOKEN USED{token ? <small>{token}</small> : null}
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="shrink-0 tabular-nums">
+                <span className="text-xl font-semibold text-foreground">{inc.score}</span>
+                <span className="text-sm text-muted-foreground"> / 100</span>
+              </span>
+              <span className="min-w-0 text-sm text-muted-foreground">{sev.hint}</span>
             </span>
-          ) : null}
-          {!inc.real_asset_reached && !inc.honeytoken_used ? (
-            <Pill tone="ok" large icon={ShieldCheck}>
-              Contained to decoys, no real asset touched
-            </Pill>
-          ) : null}
-        </div>
+          </div>
 
-        <div className="row-wrap" style={{ gap: 5 }} role="group" aria-label="ATT&CK techniques">
-          <span className="dim" style={{ fontSize: 11.5, fontWeight: 600, marginRight: 4 }}>
-            ATT&amp;CK
-          </span>
-          {inc.techniques.map((t) => (
-            <TechChip key={t} id={t} />
-          ))}
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            {inc.real_asset_reached ? (
+              <Badge variant="tag" tone="bad" className="max-w-full">
+                <Coins aria-hidden />
+                <span className="truncate">
+                  Real asset reached{assets.length ? `: ${assets.join(", ")}` : ""}
+                </span>
+              </Badge>
+            ) : null}
+            {inc.honeytoken_used ? (
+              <Badge variant="tag" tone="bad" className="max-w-full" title={token || undefined}>
+                <KeyRound aria-hidden />
+                <span className="truncate">
+                  Honeytoken used
+                  {token ? (
+                    <span className="font-mono" translate="no">
+                      : {token}
+                    </span>
+                  ) : null}
+                </span>
+              </Badge>
+            ) : null}
+            {!inc.real_asset_reached && !inc.honeytoken_used ? (
+              <Badge variant="tag" tone="ok">
+                <ShieldCheck aria-hidden /> Contained to decoys, no real asset touched
+              </Badge>
+            ) : null}
+          </div>
+
+          <dl className="m-0 flex min-w-0 flex-wrap gap-x-8 gap-y-3 border-t border-border pt-3">
+            <div className="min-w-0">
+              <dt className="text-xs text-muted-foreground">Source</dt>
+              <dd className="m-0">
+                <HashChip hash={inc.src_ip} label="" n={40} />
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">First seen</dt>
+              <dd className="m-0 font-mono text-sm text-foreground tabular-nums">
+                {clock(inc.first_event_at)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Last seen</dt>
+              <dd className="m-0 text-sm text-foreground tabular-nums">
+                <span className="font-mono">{clock(inc.last_event_at)}</span>{" "}
+                <span className="text-muted-foreground">
+                  (<RelativeTime iso={inc.last_event_at} />)
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Dwell</dt>
+              <dd className="m-0 text-sm text-foreground tabular-nums">
+                {duration(inc.first_event_at, inc.last_event_at)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Events</dt>
+              <dd className="m-0 text-sm text-foreground tabular-nums">
+                {fmtNum(inc.event_count)}
+              </dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-xs text-muted-foreground">ATT&amp;CK</dt>
+              <dd className="m-0">
+                {inc.techniques.length ? (
+                  <TechList ids={inc.techniques} max={3} />
+                ) : (
+                  <span className="text-sm text-muted-foreground">—</span>
+                )}
+              </dd>
+            </div>
+          </dl>
         </div>
-      </section>
+      </Card>
 
       <IncidentActions
         inc={inc}
@@ -938,7 +1162,7 @@ export default function IncidentDetailPage() {
           act(
             () => api.patchIncident(inc.id, { status: "acknowledged" }),
             `Incident #${inc.number} acknowledged`,
-            "Status updated and audited.",
+            "Status updated and written to the audit log.",
           )
         }
         onResolve={() =>
@@ -957,50 +1181,62 @@ export default function IncidentDetailPage() {
         }
       />
 
-      {/* TIMELINE | WHY */}
-      <div className="hero-split">
-        <Card
-          title="Attack timeline"
-          sub={`${events.length} events, oldest first. Red marks what tipped the severity.`}
-        >
-          <Timeline events={events} triggerMap={triggerMap} />
+      <div className={cn("flex min-w-0 flex-col gap-5", CLEAR_STICKY)}>
+        <Summary
+          inc={inc}
+          narrating={narrating}
+          onNarrate={async () => {
+            setNarrating(true);
+            try {
+              await api.narrateIncident(inc.id);
+              toast(
+                "AI summary queued",
+                "success",
+                "The incident page updates when narration finishes.",
+              );
+              setTimeout(reload, 2500);
+            } catch (e) {
+              toast("Couldn't generate the AI summary", "error", e.message);
+            } finally {
+              setNarrating(false);
+            }
+          }}
+        />
+
+        <Card title="Kill chain" sub={`${reached} of 6 stages reached`}>
+          <KillChain stages={inc.stages} severity={inc.severity} />
         </Card>
-        <Card
-          title={`Why is this ${inc.severity}?`}
-          sub="Every detection: rule → points → reason → evidence"
-        >
-          <Ledger inc={inc} events={events} />
-        </Card>
+
+        <section id="detail-tabs" aria-label="Incident evidence">
+          <Card flush>
+            <Tabs
+              value={tab}
+              onChange={setTab}
+              tabs={[
+                { value: "timeline", label: TAB_LABEL.timeline, count: events.length },
+                { value: "ledger", label: TAB_LABEL.ledger, count: inc.detections.length },
+                { value: "iocs", label: TAB_LABEL.iocs },
+              ]}
+            >
+              {tab === "timeline" ? (
+                <>
+                  <p className="m-0 px-5 pt-3 pb-2 text-xs text-muted-foreground">
+                    Oldest first, local time. A coloured edge marks the event that raised the
+                    severity.
+                  </p>
+                  <Timeline events={events} triggerMap={triggerMap} />
+                </>
+              ) : tab === "ledger" ? (
+                <Ledger inc={inc} events={events} />
+              ) : (
+                <Evidence inc={inc} attacker={attacker} events={events} />
+              )}
+            </Tabs>
+          </Card>
+        </section>
+
+        <AuditTrail rows={audit} number={inc.number} incidentId={inc.id} />
       </div>
-
-      {/* AI SUMMARY */}
-      <AiBand
-        inc={inc}
-        narrating={narrating}
-        onNarrate={async () => {
-          setNarrating(true);
-          try {
-            await api.narrateIncident(inc.id);
-            toast(
-              "AI summary queued",
-              "success",
-              "The incident page will update when narration finishes.",
-            );
-            setTimeout(reload, 2500);
-          } catch (e) {
-            toast("Could not generate AI summary", "error", e.message);
-          } finally {
-            setNarrating(false);
-          }
-        }}
-      />
-
-      <div className="hero-split">
-        <AttackerCard inc={inc} attacker={attacker} events={events} />
-        <EvidenceCard attacker={attacker} events={events} />
-      </div>
-
-      <AuditTrail rows={audit} number={inc.number} incidentId={inc.id} />
 
       <BlockModal
         open={blockOpen}
@@ -1027,10 +1263,18 @@ export default function IncidentDetailPage() {
             );
             await reload();
           } catch (e) {
-            toast("Could not unblock", "error", e.message);
+            toast("Couldn't unblock", "error", e.message);
           }
         }}
       />
     </div>
+  );
+}
+
+export default function IncidentDetailPage() {
+  return (
+    <Suspense fallback={<DetailSkeleton />}>
+      <IncidentDetail />
+    </Suspense>
   );
 }

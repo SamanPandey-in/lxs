@@ -1,24 +1,43 @@
 "use client";
-import { Bell, KeyRound, Plus, Send, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Bell, Check, Copy, KeyRound, Plus, Send, Trash2 } from "lucide-react";
+import { useEffect, useId, useState } from "react";
 import {
-  CodeBlock,
+  Badge,
+  Button,
+  Card,
+  CopyButton,
   EmptyState,
   ErrorState,
   Field,
   Modal,
   PageHeader,
   PageLoading,
-  Pill,
+  Select,
   Switch,
-  Table,
-  THead,
 } from "@/components/ui";
-import { RelativeTime, SectionCard } from "@/components/workspace";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { RelativeTime } from "@/components/workspace";
 import { api, PROJECT, setActiveProject } from "@/lib/core";
-import { useAsync } from "@/lib/hooks";
+import { useAsync, useCopy } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
-import { stamp } from "@/lib/utils";
 
 // Non-empty, trimmed allowlist lines.
 const normAllow = (s) =>
@@ -41,6 +60,65 @@ function invalidCidrs(lines) {
   });
 }
 
+const CAPTURE_OPTIONS = [
+  { value: "masked", label: "Masked (a***n) + clear for common list" },
+  { value: "hash", label: "Salted SHA-256 only" },
+  { value: "none", label: "Do not store passwords" },
+];
+
+const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const dateTimeFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const fmtDate = (iso, f = dateFmt) => (iso ? f.format(new Date(iso)) : "—");
+
+
+/** Template D section: title + description on top, content below, full width. */
+function Section({ title, description, action, children }) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id} className="flex min-w-0 flex-col gap-3">
+      <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0">
+          <h2 id={id} className="m-0 text-lg font-semibold text-foreground">
+            {title}
+          </h2>
+          {description ? (
+            <p className="m-0 mt-0.5 max-w-[70ch] text-sm text-muted-foreground">{description}</p>
+          ) : null}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Key prefix: always shown in full (they're short), mono, with an icon copy button. */
+function KeyPrefix({ prefix }) {
+  const [copied, copy] = useCopy();
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap">
+      <span className="font-mono text-sm text-foreground" translate="no">
+        {prefix}…
+      </span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Copy key prefix ${prefix}`}
+              onClick={() => copy(prefix)}
+            />
+          }
+        >
+          {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+        </TooltipTrigger>
+        <TooltipContent>{copied ? "Copied" : "Copy prefix"}</TooltipContent>
+      </Tooltip>
+    </span>
+  );
+}
+
 export default function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.settings(PROJECT), []);
   const [keys, setKeys] = useState([]);
@@ -51,10 +129,13 @@ export default function SettingsPage() {
   const [capture, setCapture] = useState("masked");
   const [newKey, setNewKey] = useState(null);
   const [keyBusy, setKeyBusy] = useState(false);
+  const [revoking, setRevoking] = useState(null);
+  const [revokeBusy, setRevokeBusy] = useState(false);
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
   const [hook, setHook] = useState(null);
+  const [hookTouched, setHookTouched] = useState(false);
   // Snapshot of the last-saved values, so "Save changes" knows what (if anything) changed.
   const [baseline, setBaseline] = useState(null);
 
@@ -74,18 +155,39 @@ export default function SettingsPage() {
     });
   }, [data]);
 
-  if (loading && !data)
-    return (
-      <div className="ds-page">
-        <PageLoading />
-      </div>
-    );
-  if (error && !data)
-    return (
-      <div className="ds-page">
-        <ErrorState error={error} onRetry={reload} />
-      </div>
-    );
+  const badCidrs = invalidCidrs(normAllow(allow));
+  const retentionNum = Number(retention);
+  const badRetention =
+    !Number.isInteger(retentionNum) || retentionNum < 1 || retentionNum > 365
+      ? "Enter a whole number of days from 1 to 365."
+      : null;
+  const invalid = badCidrs.length > 0 || Boolean(badRetention);
+  const changes = [];
+  if (baseline) {
+    if (normAllow(allow).join("\n") !== normAllow(baseline.allow).join("\n"))
+      changes.push("allowlist");
+    if (retentionNum !== Number(baseline.retention)) changes.push("event retention");
+    if (ai !== baseline.ai) changes.push("AI narration");
+    if (capture !== baseline.capture) changes.push("credential capture");
+  }
+  const dirty = changes.length > 0;
+
+  // Warn before leaving with unsaved policy changes (patterns.md §6).
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  const shell = (children) => (
+    <div className="mx-auto flex w-full max-w-[960px] min-w-0 flex-col gap-8">{children}</div>
+  );
+  if (loading && !data) return shell(<PageLoading label="Loading settings" />);
+  if (error && !data) return shell(<ErrorState error={error} onRetry={reload} what="settings" />);
 
   const createKey = async () => {
     setKeyBusy(true);
@@ -100,13 +202,19 @@ export default function SettingsPage() {
     }
   };
 
-  const revokeKey = async (key) => {
+  const revokeKey = async () => {
+    const key = revoking;
+    if (!key) return;
+    setRevokeBusy(true);
     try {
       await api.revokeKey(key.id);
       setKeys((current) => current.filter((item) => item.id !== key.id));
-      toast(`Revoked ${key.name}`, "warning", "Sensors using it will be refused.");
+      toast(`Revoked ${key.name}`, "warning", "Sensors using it will be refused. Logged to audit.");
+      setRevoking(null);
     } catch (err) {
       toast("Could not revoke key", "error", err.message);
+    } finally {
+      setRevokeBusy(false);
     }
   };
 
@@ -123,231 +231,340 @@ export default function SettingsPage() {
     }
   };
 
-  const badCidrs = invalidCidrs(normAllow(allow));
-  const changes = [];
-  if (baseline) {
-    if (normAllow(allow).join("\n") !== normAllow(baseline.allow).join("\n"))
-      changes.push("allowlist");
-    if (Number(retention) !== Number(baseline.retention)) changes.push("event retention");
-    if (ai !== baseline.ai) changes.push("AI narration");
-    if (capture !== baseline.capture) changes.push("credential capture");
-  }
-  const dirty = changes.length > 0;
-
   const saveChanges = () => {
-    if (!dirty || badCidrs.length) return;
+    if (!dirty || invalid) return;
     toast(
       "Settings saved",
       "success",
       `Updated ${changes.join(", ")}. Policy version bumped and audited.`,
     );
-    setBaseline({ allow, retention, ai, capture });
+    setBaseline({ allow, retention: retentionNum, ai, capture });
   };
 
-  return (
-    <div className="ds-page">
+  const hookValid = /^https?:\/\/\S+$/.test(hook || "");
+  const closeHook = () => {
+    setHook(null);
+    setHookTouched(false);
+  };
+  const addHook = () => {
+    setHookTouched(true);
+    if (!hookValid) return;
+    setChannels((c) => [
+      ...c,
+      {
+        id: `ch_${Date.now()}`,
+        type: "webhook",
+        label: "Custom webhook",
+        target: hook,
+        min_severity: "high",
+        status: "ok",
+      },
+    ]);
+    closeHook();
+    toast("Webhook added");
+  };
+
+  return shell(
+    <>
       <PageHeader
-        eyebrow="SYSTEM / PROJECT"
         title="Settings"
-        purpose={`Configuration for ${data?.project?.name || "this project"}. Ingest keys are write-only: a stolen key cannot read incidents or other projects.`}
+        purpose={`Configuration for ${data?.project?.name || "this project"}. Ingest keys are write-only: a stolen key can't read incidents or other projects.`}
         actions={
-          <>
-            <button type="button" className="btn" onClick={() => setProjectOpen(true)}>
-              <Plus /> New project
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!dirty || badCidrs.length > 0}
-              title={
-                badCidrs.length
-                  ? "Fix the invalid allowlist entries first"
-                  : dirty
-                    ? `Unsaved: ${changes.join(", ")}`
-                    : "No changes to save"
-              }
-              onClick={saveChanges}
-            >
-              {dirty ? "Save changes" : "Saved"}
-            </button>
-          </>
+          <Button variant="outline" onClick={() => setProjectOpen(true)}>
+            <Plus aria-hidden /> New project
+          </Button>
         }
       />
 
-      <div className="ds-settings-grid">
-        <SectionCard
-          title="Ingest keys"
-          detail="Used by sensors and the SDK. Shown once at creation."
-          action={
-            <button type="button" className="btn btn-sm" onClick={createKey} disabled={keyBusy}>
-              <Plus /> {keyBusy ? "Creating…" : "Create key"}
-            </button>
-          }
-          flush
-        >
+      <Section
+        title="Ingest keys"
+        description="Sensors and the SDK use these to send events. The full key is shown once, when you create it."
+        action={
+          <Button variant="outline" size="sm" onClick={createKey} loading={keyBusy}>
+            {keyBusy ? null : <Plus aria-hidden />} Create key
+          </Button>
+        }
+      >
+        <Card flush>
           {keys.length === 0 ? (
-            <EmptyState icon={KeyRound} title="No ingest keys">
+            <EmptyState
+              icon={KeyRound}
+              title="No ingest keys"
+              action={
+                <Button variant="outline" size="sm" onClick={createKey} loading={keyBusy}>
+                  Create key
+                </Button>
+              }
+            >
               Create a key to connect the SDK and sensors.
             </EmptyState>
           ) : (
-            <Table>
-              <THead cols={["Name", "Prefix", "Created", "Last used", ""]} />
-              <tbody>
+            <Table inset>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead scope="col">Name</TableHead>
+                  <TableHead scope="col">Key</TableHead>
+                  <TableHead scope="col">Created</TableHead>
+                  <TableHead scope="col">Last used</TableHead>
+                  <TableHead scope="col">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {keys.map((k) => (
-                  <tr key={k.id}>
-                    <td>
-                      <strong>{k.name}</strong>
-                      <span className="table-sub">
-                        scope: {(k.scopes || ["ingest"]).join(", ")}
+                  <TableRow key={k.id} className="h-11">
+                    <TableCell>
+                      <span className="inline-flex max-w-full items-center gap-2 whitespace-nowrap">
+                        <span
+                          className="max-w-[28ch] truncate font-medium text-foreground"
+                          title={k.name}
+                        >
+                          {k.name}
+                        </span>
+                        {(k.scopes || ["ingest"]).map((scope) => (
+                          <Badge key={scope} variant="tag" tone="neutral" title={`Scope: ${scope}`}>
+                            {scope}
+                          </Badge>
+                        ))}
                       </span>
-                    </td>
-                    <td className="mono">{k.prefix}…</td>
-                    <td className="dim">{stamp(k.created_at)}</td>
-                    <td>
+                    </TableCell>
+                    <TableCell>
+                      <KeyPrefix prefix={k.prefix} />
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      <time dateTime={k.created_at} title={fmtDate(k.created_at, dateTimeFmt)}>
+                        {fmtDate(k.created_at)}
+                      </time>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
                       {k.last_used_at ? (
                         <RelativeTime iso={k.last_used_at} />
                       ) : (
-                        <span className="faint">never</span>
+                        <span className="text-muted-foreground">Never</span>
                       )}
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        aria-label={`Revoke ${k.name}`}
-                        onClick={() => revokeKey(k)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive/10"
+                        aria-label={`Revoke ${k.name}…`}
+                        onClick={() => setRevoking(k)}
                       >
-                        <Trash2 /> Revoke
-                      </button>
-                    </td>
-                  </tr>
+                        <Trash2 aria-hidden /> Revoke…
+                      </Button>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
+              </TableBody>
             </Table>
           )}
-        </SectionCard>
+        </Card>
+      </Section>
 
-        <SectionCard
-          title="Notifications"
-          detail="Webhooks fire for High and Critical targeted incidents only"
-          action={
-            <button type="button" className="btn btn-sm" onClick={() => setHook("")}>
-              <Plus /> Add webhook
-            </button>
-          }
-          flush
-        >
+      <Section
+        title="Notifications"
+        description="Webhooks fire for High and Critical targeted incidents only."
+        action={
+          <Button variant="outline" size="sm" onClick={() => setHook("")}>
+            <Plus aria-hidden /> Add webhook
+          </Button>
+        }
+      >
+        <Card flush>
           {channels.length === 0 ? (
             <EmptyState icon={Bell} title="No channels">
               Add a Slack or generic webhook to be told about critical incidents.
             </EmptyState>
           ) : (
-            channels.map((c) => (
-              <div className="ds-res" key={c.id}>
-                <div className="ds-res-main">
-                  <div className="row" style={{ gap: 8 }}>
-                    {c.label}
-                    <Pill tone="cache">{c.type}</Pill>
-                  </div>
-                  <div className="ds-res-meta mono truncate" style={{ maxWidth: 360 }}>
-                    {c.target}
-                  </div>
-                </div>
-                <Pill tone="halted">≥ {c.min_severity}</Pill>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => toast(`Test sent to ${c.label}`, "success", "HTTP 200 in 142 ms")}
+            <ul className="m-0 list-none p-0">
+              {channels.map((c) => (
+                <li
+                  key={c.id}
+                  className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 last:border-b-0"
                 >
-                  <Send /> Test
-                </button>
-              </div>
-            ))
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="inline-flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium text-foreground">{c.label}</span>
+                      <Badge variant="tag" tone="info">
+                        {c.type}
+                      </Badge>
+                    </span>
+                    <span
+                      className="truncate font-mono text-sm text-muted-foreground"
+                      title={c.target}
+                      translate="no"
+                    >
+                      {c.target || "—"}
+                    </span>
+                  </div>
+                  <Badge variant="tag" tone="neutral">
+                    {c.min_severity === "critical" ? "Critical only" : "High and above"}
+                  </Badge>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      toast(`Test sent to ${c.label}`, "success", "HTTP 200 in 142 ms")
+                    }
+                  >
+                    <Send aria-hidden /> Send test
+                  </Button>
+                </li>
+              ))}
+            </ul>
           )}
-        </SectionCard>
+        </Card>
+      </Section>
 
-        <SectionCard
-          title="Allowlist"
-          detail="Your own scanners and office ranges: never scored, never blocked"
-        >
-          <Field
-            label="CIDR ranges, one per line"
-            htmlFor="allow"
-            hint="Traffic from these ranges is ignored by detection."
-          >
-            <textarea
-              id="allow"
-              rows={5}
-              value={allow}
-              onChange={(e) => setAllow(e.target.value)}
-              placeholder={"10.0.0.0/8\n192.168.0.0/16\n203.0.113.42"}
-              aria-invalid={badCidrs.length > 0}
-            />
-            {badCidrs.length ? (
-              <p role="alert" style={{ color: "var(--bad)", fontSize: 12, margin: "6px 0 0" }}>
-                Not a valid IP or CIDR range: {badCidrs.join(", ")}
-              </p>
-            ) : null}
-          </Field>
-        </SectionCard>
-
-        <SectionCard title="Data & AI">
-          <div className="col" style={{ gap: 4 }}>
+      <Section
+        title="Detection policy"
+        description="What gets scored, how long events are kept, and how attacker credentials are stored."
+      >
+        <Card flush>
+          <div className="flex min-w-0 flex-col gap-6 p-5">
             <Field
-              label="Event retention (days)"
-              htmlFor="ret"
-              hint="Events older than this are deleted permanently and drop out of the audit window."
+              id="allow"
+              label="Allowlist: CIDR ranges, one per line"
+              hint="Your own scanners and office ranges. Traffic from these is never scored or blocked."
+              error={
+                badCidrs.length ? `Not a valid IP or CIDR range: ${badCidrs.join(", ")}` : null
+              }
             >
-              <input
+              <Textarea
+                id="allow"
+                name="allowlist"
+                rows={5}
+                spellCheck={false}
+                autoCapitalize="none"
+                value={allow}
+                onChange={(e) => setAllow(e.target.value)}
+                placeholder={"10.0.0.0/8\n192.168.0.0/16\n203.0.113.42"}
+                aria-invalid={badCidrs.length > 0 || undefined}
+                className="min-h-28 font-mono"
+                translate="no"
+              />
+            </Field>
+
+            <Field
+              id="ret"
+              label="Event retention (days)"
+              hint="Events older than this are deleted permanently and drop out of the audit window."
+              error={badRetention}
+            >
+              <Input
                 id="ret"
+                name="retention_days"
                 type="number"
+                inputMode="numeric"
                 min={1}
                 max={365}
                 value={retention}
                 onChange={(e) => setRetention(e.target.value)}
-                style={{ maxWidth: 140 }}
+                aria-invalid={Boolean(badRetention) || undefined}
+                className="w-32 tabular-nums"
               />
             </Field>
-            <div className="switch-row switch-row">
-              <div>
-                <strong>AI narration</strong>
-                <p>
+
+            <div className="flex min-w-0 items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p id="ai-label" className="m-0 text-base font-medium text-foreground">
+                  AI narration
+                </p>
+                <p className="m-0 mt-0.5 max-w-[60ch] text-sm text-muted-foreground">
                   Generate a plain-English summary for each incident. Falls back to a template when
                   the LLM is down.
                 </p>
               </div>
-              <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                <span className="dim" style={{ fontSize: 12.5, minWidth: 20 }}>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="w-6 text-sm text-muted-foreground" aria-hidden>
                   {ai ? "On" : "Off"}
                 </span>
                 <Switch checked={ai} onChange={setAi} label="AI narration" />
               </div>
             </div>
+
             <Field
+              id="cap"
               label="Credential capture mode"
-              htmlFor="cap"
               hint="How attacker passwords are stored. Common passwords from the bundled list are kept in clear for analysis."
             >
-              <select id="cap" value={capture} onChange={(e) => setCapture(e.target.value)}>
-                <option value="masked">Masked (a***n) + clear for common list</option>
-                <option value="hash">Salted SHA-256 only</option>
-                <option value="none">Do not store passwords</option>
-              </select>
+              <Select
+                id="cap"
+                name="credential_capture"
+                value={capture}
+                onValueChange={setCapture}
+                options={CAPTURE_OPTIONS}
+                className="w-full sm:w-96"
+              />
             </Field>
           </div>
-        </SectionCard>
-      </div>
+
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-border px-5 py-3">
+            <p role="status" className="m-0 min-w-0 text-sm text-muted-foreground">
+              {!dirty ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <Check className="size-4 text-ok" aria-hidden /> All changes saved
+                </span>
+              ) : invalid ? (
+                <span className="text-destructive">Fix the highlighted fields to save.</span>
+              ) : (
+                `Unsaved changes: ${changes.join(", ")}`
+              )}
+            </p>
+            {dirty ? (
+              <Button onClick={saveChanges} disabled={invalid}>
+                Save changes
+              </Button>
+            ) : null}
+          </div>
+        </Card>
+      </Section>
+
+      <Dialog
+        open={!!newKey}
+        onOpenChange={(open) => {
+          if (!open) setNewKey(null);
+        }}
+      >
+        <DialogContent className="gap-4 border border-border sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-semibold">Copy your new ingest key</DialogTitle>
+            <DialogDescription className="text-base">
+              You won't see this key again. Store it in your sensor and SDK environment now.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-muted/40 py-2 pr-2 pl-3">
+            <code
+              className="min-w-0 flex-1 font-mono text-sm text-foreground [overflow-wrap:anywhere]"
+              translate="no"
+            >
+              {newKey || ""}
+            </code>
+            {newKey ? <CopyButton text={newKey} label="Copy key" /> : null}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button onClick={() => setNewKey(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Modal
-        open={!!newKey}
-        onClose={() => setNewKey(null)}
-        title="Copy your new ingest key"
-        actions={[{ label: "Done", onClick: () => setNewKey(null) }]}
+        open={!!revoking}
+        onClose={() => setRevoking(null)}
+        title={revoking ? `Revoke ${revoking.name}?` : "Revoke key?"}
+        actions={[
+          { label: "Revoke key", tone: "danger", busy: revokeBusy, onClick: revokeKey },
+        ]}
       >
-        <p style={{ marginBottom: 10 }}>
-          This is the only time the full key is shown. Store it in your sensor and SDK environment.
+        <p className="m-0">
+          Sensors and SDKs using{" "}
+          <span className="font-mono text-foreground" translate="no">
+            {revoking?.prefix}…
+          </span>{" "}
+          will be refused from now on. This can't be undone; create a new key to reconnect them.
         </p>
-        <CodeBlock>{newKey || ""}</CodeBlock>
       </Modal>
 
       <Modal
@@ -356,63 +573,55 @@ export default function SettingsPage() {
         title="Create a project"
         actions={[
           {
-            label: projectBusy ? "Creating…" : "Create project",
-            disabled: projectBusy || !projectName.trim(),
+            label: "Create project",
+            busy: projectBusy,
+            disabled: !projectName.trim(),
             onClick: createProject,
           },
         ]}
       >
-        <Field label="Project name" htmlFor="project-name">
-          <input
+        <Field id="project-name" label="Project name">
+          <Input
             id="project-name"
+            name="project_name"
+            autoComplete="off"
             value={projectName}
             maxLength={128}
             onChange={(event) => setProjectName(event.target.value)}
-            placeholder="Production app"
+            placeholder="Production app…"
           />
         </Field>
       </Modal>
 
       <Modal
         open={hook !== null}
-        onClose={() => setHook(null)}
+        onClose={closeHook}
         title="Add a webhook"
-        actions={[
-          {
-            label: "Add",
-            disabled: !/^https?:\/\//.test(hook || ""),
-            onClick: () => {
-              setChannels((c) => [
-                ...c,
-                {
-                  id: `ch_${Date.now()}`,
-                  type: "webhook",
-                  label: "Custom webhook",
-                  target: hook,
-                  min_severity: "high",
-                  status: "ok",
-                },
-              ]);
-              setHook(null);
-              toast("Webhook added");
-            },
-          },
-        ]}
+        actions={[{ label: "Add webhook", disabled: hookTouched && !hookValid, onClick: addHook }]}
       >
         <Field
+          id="hook"
           label="Endpoint URL"
-          htmlFor="hook"
           hint="Private and loopback addresses are refused (SSRF guard)."
+          error={
+            hookTouched && !hookValid ? "Enter a full URL that starts with https:// or http://." : null
+          }
         >
-          <input
+          <Input
             id="hook"
-            type="text"
+            name="webhook_url"
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
             value={hook || ""}
             onChange={(e) => setHook(e.target.value)}
+            onBlur={() => setHookTouched(Boolean(hook))}
+            aria-invalid={(hookTouched && !hookValid) || undefined}
             placeholder="https://hooks.example.com/lxs"
           />
         </Field>
       </Modal>
-    </div>
+    </>,
   );
 }

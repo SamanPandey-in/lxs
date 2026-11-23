@@ -30,7 +30,9 @@ const DEV_KEY = 'ds_dev_0000000000000000000000000000000000000000';
 // /health still reports healthy. Override with ATTACKER_API_TOKEN.
 const ATTACKER_TOKEN = process.env.ATTACKER_API_TOKEN ?? 'demo-local-attacker-control-token';
 const DEMO_EMAIL = process.env.LXS_DEMO_EMAIL ?? 'demo@lxs.dev';
-const DEMO_USERNAME = process.env.LXS_DEMO_USERNAME ?? process.env.LXS_DEMO_EMAIL ?? 'demo-analyst';
+// Log in by email by default: it is unique and survives DB volumes that predate the
+// `demo-analyst` username. LXS_DEMO_USERNAME still overrides the login identifier.
+const DEMO_LOGIN = process.env.LXS_DEMO_USERNAME ?? DEMO_EMAIL;
 const DEMO_PASSWORD = process.env.LXS_DEMO_PASSWORD ?? 'demo1234';
 const WIN = process.platform === 'win32';
 const npm = WIN ? 'npm.cmd' : 'npm';
@@ -216,11 +218,11 @@ async function resolveProject() {
   const login = await fetch(`${API}/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier: DEMO_USERNAME, password: DEMO_PASSWORD }),
+    body: JSON.stringify({ identifier: DEMO_LOGIN, password: DEMO_PASSWORD }),
   }).catch(() => null);
   if (!login?.ok) {
     const detail = login ? `HTTP ${login.status}` : 'API connection failed';
-    fail(`could not log in as ${DEMO_EMAIL} (${detail})`);
+    fail(`could not log in as ${DEMO_LOGIN} (${detail})`);
     return null;
   }
   const cookies = login.headers.getSetCookie?.() ?? [login.headers.get('set-cookie') ?? ''];
@@ -358,6 +360,15 @@ async function up() {
 
 // ------------------------------------------------------------- sensors
 
+/** Absolute path of the built `lxs` CLI, read from sdk/lxs/package.json "bin". */
+function lxsCliEntry() {
+  const pkgDir = join(ROOT, 'sdk/lxs');
+  const { bin } = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'));
+  const rel = typeof bin === 'string' ? bin : bin?.lxs;
+  const entry = rel ? join(pkgDir, rel) : null;
+  return entry && existsSync(entry) ? entry : null;
+}
+
 async function sensors(projectId, customKey = false) {
   step('Building the decoy images');
   if (flags.has('--no-images')) {
@@ -389,7 +400,15 @@ async function sensors(projectId, customKey = false) {
 
   step('Generating the decoy stack from decoy.config.ts');
   ok('.env.lxs key preserved and local API endpoint configured');
-  if (run('npx', ['lxs', 'build'], { cwd: EXAMPLE }).status !== 0) {
+  // Run the CLI entry directly instead of `npx lxs`: on a fresh clone the bin target
+  // (sdk/lxs/dist) did not exist at `pnpm install` time, so pnpm never linked
+  // examples/acme-shop/node_modules/.bin/lxs and `npx lxs` fails on Windows.
+  const cli = lxsCliEntry();
+  if (!cli) {
+    fail('LXS CLI entry not found in sdk/lxs/dist — did the build step succeed?');
+    return false;
+  }
+  if (run(process.execPath, [cli, 'build'], { cwd: EXAMPLE, shell: false }).status !== 0) {
     fail('`lxs build` failed');
     return false;
   }

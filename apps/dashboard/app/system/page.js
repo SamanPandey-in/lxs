@@ -1,212 +1,298 @@
 "use client";
-import { Activity, AlertTriangle, Layers, Radio, RotateCcw, Sparkles } from "lucide-react";
+import { Activity, AlertTriangle, Layers, RotateCcw, Server, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { RateArea } from "@/components/charts";
 import {
+  Badge,
+  Button,
+  Card,
   EmptyState,
   ErrorState,
   PageHeader,
   PageLoading,
-  Pill,
   StatTile,
-  Table,
-  THead,
 } from "@/components/ui";
-import { RelativeTime, SectionCard } from "@/components/workspace";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { RelativeTime } from "@/components/workspace";
 import { api } from "@/lib/core";
 import { usePolling } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
-import { fmtNum, mmss } from "@/lib/utils";
+import { cn, fmtNum } from "@/lib/utils";
+
+const NBSP = " ";
+const pct = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
+const secs = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
+
+
+function uptime(seconds) {
+  if (seconds == null) return null;
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  return d ? `${d}${NBSP}d ${h}${NBSP}h` : `${h}${NBSP}h ${Math.floor((seconds % 3600) / 60)}${NBSP}min`;
+}
+const latency = (ms) => (ms ? `${secs.format(ms / 1000)}${NBSP}s` : "—");
+
+/** One key/value row in a definition list. Empty values render as a muted em dash. */
+function Fact({ label, children, mono }) {
+  const empty = children == null || children === "" || children === "—";
+  return (
+    <div className="flex min-w-0 items-baseline justify-between gap-4 border-b border-border py-2.5 last:border-b-0">
+      <dt className="shrink-0 text-sm text-muted-foreground">{label}</dt>
+      <dd
+        className={cn(
+          "m-0 min-w-0 truncate text-right text-sm tabular-nums",
+          empty ? "text-muted-foreground" : "font-medium text-foreground",
+          mono && !empty && "font-mono",
+        )}
+      >
+        {empty ? "—" : children}
+      </dd>
+    </div>
+  );
+}
 
 export default function SystemPage() {
   const { data: s, error, loading, reload } = usePolling(() => api.system(), 6000, []);
-  if (loading && !s)
-    return (
-      <div className="ds-page">
-        <PageLoading />
-      </div>
-    );
-  if (error && !s)
-    return (
-      <div className="ds-page">
-        <ErrorState error={error} onRetry={reload} />
-      </div>
-    );
+  const [retrying, setRetrying] = useState(null);
+
+  if (loading && !s) return <PageLoading label="Loading platform health" />;
+  if (error && !s) return <ErrorState error={error} onRetry={reload} what="platform health" />;
 
   const retry = async (j) => {
+    setRetrying(j.id);
     try {
       await api.retryJob(j.id);
       toast(`Retried ${j.name}`, "success");
       reload();
     } catch (e) {
       toast("Retry failed", "error", e.message);
+    } finally {
+      setRetrying(null);
     }
   };
+
   const llm = s.llm || {};
+  // The real API reports "—" (or nothing) when no model is set up: never show that as 0 %.
+  const llmConfigured =
+    Boolean(llm.model) && llm.model !== "—" && llm.model !== "not configured" && llm.ok !== false;
+  const llmRan = llmConfigured && Number(llm.calls_24h) > 0;
+  const failed = s.failed_jobs || [];
+  const agents = s.agents || [];
+  const meta = [s.version ? `Version ${s.version}` : null, uptime(s.uptime_seconds) && `up ${uptime(s.uptime_seconds)}`]
+    .filter(Boolean)
+    .join(" · ");
 
   return (
-    <div className="ds-page">
-      <PageHeader
-        eyebrow="SYSTEM / OWNER"
-        title="Platform health"
-        purpose="Is the pipeline healthy? Ingest, queue, LLM narrator, and the agents shipping events."
-        actions={
-          <>
-            <Pill tone="ok">v{s.version}</Pill>
-            <Pill tone="halted">
-              up {Math.floor(s.uptime_seconds / 86400)}d{" "}
-              {Math.floor((s.uptime_seconds % 86400) / 3600)}h
-            </Pill>
-          </>
-        }
-      />
+    <div className="flex min-w-0 flex-col gap-6">
+      <div className="flex min-w-0 flex-col gap-1">
+        <PageHeader
+          title="Platform health"
+          purpose="Is the pipeline healthy? Ingest, queue, the LLM narrator and the agents shipping events."
+        />
+        {meta ? <p className="m-0 text-xs text-muted-foreground tabular-nums">{meta}</p> : null}
+      </div>
 
-      <div className="overview-metrics">
+      <div className="grid min-w-0 grid-cols-2 gap-4 md:grid-cols-4">
         <StatTile
-          label="Ingest rate"
-          value={`${fmtNum(s.ingest_rate_per_min)}/min`}
+          label="Ingest per minute"
+          value={fmtNum(s.ingest_rate_per_min ?? 0)}
           hint="Events accepted by POST /v1/ingest"
           tone="healed"
           icon={Activity}
         />
         <StatTile
           label="Queue depth"
-          value={s.queue_depth}
+          value={fmtNum(s.queue_depth ?? 0)}
           hint="Jobs waiting (pg-boss)"
-          tone={s.queue_depth > 50 ? "drift" : "ok"}
+          tone={s.queue_depth > 50 ? "drift" : undefined}
           icon={Layers}
         />
         <StatTile
           label="Failed jobs"
-          value={s.failed_jobs.length}
-          hint={s.failed_jobs.length ? "Needs a retry or a look" : "All clear"}
-          tone={s.failed_jobs.length ? "drift" : "ok"}
+          value={failed.length}
+          hint={failed.length ? "Needs a retry or a look" : "All clear"}
+          tone={failed.length ? "drift" : undefined}
           icon={AlertTriangle}
         />
         <StatTile
           label="LLM success"
-          value={`${Math.round((llm.success_rate || 0) * 100)}%`}
-          hint={`p50 ${((llm.p50_ms || 0) / 1000).toFixed(1)} s · p95 ${((llm.p95_ms || 0) / 1000).toFixed(1)} s`}
-          tone="cache"
+          value={llmRan ? pct.format(llm.success_rate || 0) : "—"}
+          hint={
+            !llmConfigured
+              ? "Not configured · template summaries"
+              : llmRan
+                ? `p50 ${latency(llm.p50_ms)} · p95 ${latency(llm.p95_ms)}`
+                : "No narrations in the last 24 h"
+          }
+          tone={llmRan ? "cache" : undefined}
           icon={Sparkles}
         />
       </div>
 
-      <div className="overview-grid">
-        <SectionCard title="Ingest volume, last 24 h" detail="Events per hour across all sensors">
-          <RateArea data={s.ingest_series} />
-        </SectionCard>
-        <SectionCard title="LLM narrator" flush>
-          <div className="glance">
-            <div className="glance-row">
-              <span className="dim">Model</span>
-              <strong className="mono">{llm.model || "not configured"}</strong>
-            </div>
-            {!llm.model && (
-              <div className="glance-row">
-                <span className="dim">Mode</span>
-                <strong>Deterministic template summaries</strong>
-              </div>
-            )}
-            <div className="glance-row">
-              <span className="dim">Narrations (24 h)</span>
-              <strong className="num">{llm.calls_24h}</strong>
-            </div>
-            <div className="glance-row">
-              <span className="dim">Template fallbacks</span>
-              <strong className="num">{llm.fallbacks_24h}</strong>
-            </div>
-            <div className="glance-row">
-              <span className="dim">Median latency</span>
-              <strong className="num">{mmss((llm.p50_ms || 0) / 1000)}</strong>
-            </div>
-            <div className="glance-row">
-              <span className="dim">Stream connections</span>
-              <strong className="num">{s.stream_connections}</strong>
-            </div>
-          </div>
-        </SectionCard>
+      <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-3">
+        <Card
+          className="lg:col-span-2"
+          title="Ingest volume, last 24 h"
+          sub="Events per hour across all sensors"
+        >
+          <RateArea
+            data={s.ingest_series}
+            emptyHint="Events appear here as soon as a sensor or the SDK sends one."
+          />
+        </Card>
+        <Card title="LLM narrator">
+          <dl className="m-0">
+            <Fact label="Model" mono={llmConfigured}>
+              {llmConfigured ? llm.model : "Not configured"}
+            </Fact>
+            {!llmConfigured && <Fact label="Mode">Template summaries</Fact>}
+            <Fact label="Narrations (24 h)">{llmConfigured ? fmtNum(llm.calls_24h ?? 0) : null}</Fact>
+            <Fact label="Template fallbacks">
+              {llmConfigured ? fmtNum(llm.fallbacks_24h ?? 0) : null}
+            </Fact>
+            <Fact label="Median latency">{llmRan ? latency(llm.p50_ms) : null}</Fact>
+            <Fact label="Stream connections">{fmtNum(s.stream_connections ?? 0)}</Fact>
+          </dl>
+        </Card>
       </div>
 
-      <SectionCard
+      <Card
         title="Failed jobs"
-        detail="Narration and notification jobs retry automatically 5 times"
+        sub="Narration and notification jobs retry automatically 5 times"
         flush
       >
-        {s.failed_jobs.length === 0 ? (
+        {failed.length === 0 ? (
           <EmptyState icon={AlertTriangle} title="No failed jobs">
             Every background job has completed.
           </EmptyState>
         ) : (
-          <Table>
-            <THead cols={["Job", "Error", "Attempts", "Failed", ""]} />
-            <tbody>
-              {s.failed_jobs.map((j) => (
-                <tr key={j.id}>
-                  <td>
-                    <strong>{j.name}</strong>
-                    <span className="table-sub mono">{j.id}</span>
-                  </td>
-                  <td style={{ maxWidth: 420 }}>{j.error}</td>
-                  <td className="num">{j.attempts}</td>
-                  <td>
+          <Table inset>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead scope="col">Job</TableHead>
+                <TableHead scope="col">Error</TableHead>
+                <TableHead scope="col" className="text-right">
+                  Attempts
+                </TableHead>
+                <TableHead scope="col">Failed</TableHead>
+                <TableHead scope="col">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {failed.map((j) => (
+                <TableRow key={j.id} className="h-11">
+                  <TableCell>
+                    <div className="font-medium text-foreground">{j.name}</div>
+                    <div className="font-mono text-xs text-muted-foreground" translate="no">
+                      {j.id}
+                    </div>
+                  </TableCell>
+                  <TableCell className="max-w-md text-muted-foreground [overflow-wrap:anywhere]">
+                    {j.error}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{fmtNum(j.attempts)}</TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <RelativeTime iso={j.failed_at} />
-                  </td>
-                  <td>
-                    <button type="button" className="btn btn-sm" onClick={() => retry(j)}>
-                      <RotateCcw /> Retry
-                    </button>
-                  </td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      loading={retrying === j.id}
+                      onClick={() => retry(j)}
+                      aria-label={`Retry ${j.name}`}
+                    >
+                      {retrying === j.id ? null : <RotateCcw aria-hidden />} Retry
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
+            </TableBody>
           </Table>
         )}
-      </SectionCard>
+      </Card>
 
-      <SectionCard title="Agents" detail="Sensor agents and their versions" flush>
-        <Table>
-          <THead
-            cols={[
-              "Agent",
-              "Host",
-              "Version",
-              "Last heartbeat",
-              { label: "Buffered", num: true },
-              { label: "Dropped", num: true },
-            ]}
-          />
-          <tbody>
-            {s.agents.map((a) => (
-              <tr key={a.id}>
-                <td className="mono">
-                  <strong>{a.id}</strong>
-                </td>
-                <td>{a.host}</td>
-                <td>
-                  <span className="row" style={{ gap: 6 }}>
-                    <span className="mono">{a.version}</span>
-                    {a.outdated ? (
-                      <Pill tone="drift" title={`Latest is ${a.latest}`}>
-                        outdated
-                      </Pill>
-                    ) : (
-                      <Pill tone="ok">current</Pill>
+      <Card title="Agents" sub="Sensor agents and their versions" flush>
+        {agents.length === 0 ? (
+          <EmptyState icon={Server} title="No agents connected">
+            An agent appears here after its first heartbeat. See Get started for the install
+            command.
+          </EmptyState>
+        ) : (
+          <Table inset>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead scope="col">Agent</TableHead>
+                <TableHead scope="col">Host</TableHead>
+                <TableHead scope="col">Version</TableHead>
+                <TableHead scope="col">Last heartbeat</TableHead>
+                <TableHead scope="col" className="text-right">
+                  Buffered
+                </TableHead>
+                <TableHead scope="col" className="text-right">
+                  Dropped
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {agents.map((a) => (
+                <TableRow key={a.id} className="h-11">
+                  <TableCell className="font-mono font-medium whitespace-nowrap" translate="no">
+                    {a.id}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap" translate="no">
+                    {a.host}
+                  </TableCell>
+                  <TableCell>
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                      <span className="font-mono" translate="no">
+                        {a.version}
+                      </span>
+                      {a.outdated ? (
+                        <Badge variant="tag" tone="warn" title={`Latest is ${a.latest}`}>
+                          Outdated
+                        </Badge>
+                      ) : (
+                        <Badge variant="status" tone="ok">
+                          Current
+                        </Badge>
+                      )}
+                    </span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <RelativeTime iso={a.last_heartbeat_at} />
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right tabular-nums",
+                      !Number(a.buffer) && "text-muted-foreground",
                     )}
-                  </span>
-                </td>
-                <td>
-                  <RelativeTime iso={a.last_heartbeat_at} />
-                </td>
-                <td className="num">{a.buffer}</td>
-                <td className="num">{a.dropped}</td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      </SectionCard>
-      <div className="dim row" style={{ gap: 6, fontSize: 12 }}>
-        <Radio size={13} /> {s.stream_connections} browser stream connections open.
-      </div>
+                  >
+                    {fmtNum(a.buffer ?? 0)}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right tabular-nums",
+                      !Number(a.dropped) && "text-muted-foreground",
+                    )}
+                  >
+                    {fmtNum(a.dropped ?? 0)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
     </div>
   );
 }

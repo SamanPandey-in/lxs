@@ -1,7 +1,9 @@
 "use client";
-import { Download, ScrollText } from "lucide-react";
+import { Download, ScrollText, SearchX } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
+  Button,
   CodeBlock,
   Drawer,
   EmptyState,
@@ -14,7 +16,7 @@ import { AuditTable, FilterSelect, SectionCard, TextFilter } from "@/components/
 import { api, PROJECT } from "@/lib/core";
 import { usePolling } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
-import { csvEscape, downloadBlob } from "@/lib/utils";
+import { csvEscape, downloadBlob, fmtNum } from "@/lib/utils";
 
 // A plain-English sentence for one audit row, so the accountability record reads like
 // language, not like raw action ids (IMPR P1).
@@ -61,6 +63,15 @@ function preciseStamp(iso) {
   });
 }
 
+/** Export CSV: outline; when there is nothing to export it is disabled with a reason. */
+function ExportButton({ count, reason, onExport }) {
+  return (
+    <Button variant="outline" onClick={onExport} disabledReason={count ? undefined : reason}>
+      <Download aria-hidden /> Export CSV
+    </Button>
+  );
+}
+
 export default function AuditPage() {
   const { data, error, loading, reload } = usePolling(() => api.audit(PROJECT), 6000, []);
   const [actor, setActor] = useState("all");
@@ -82,6 +93,12 @@ export default function AuditPage() {
       ),
     [rows, actor, action, q],
   );
+  const filtered = actor !== "all" || action !== "all" || q !== "";
+  const clearFilters = () => {
+    setActor("all");
+    setAction("all");
+    setQ("");
+  };
 
   const exportCsv = () => {
     const lines = [
@@ -93,81 +110,118 @@ export default function AuditPage() {
       ),
     ];
     downloadBlob("lxs-audit.csv", lines.join("\n"), "text/csv");
-    toast(`Exported ${shown.length} audit rows`, "success");
+    toast(
+      `Exported ${fmtNum(shown.length)} audit ${shown.length === 1 ? "entry" : "entries"}`,
+      "success",
+    );
   };
 
   const day = Date.now() - 86400e3;
   const last24 = rows.filter((r) => new Date(r.at).getTime() > day).length;
+  const blocks = rows.filter((r) => r.action === "block_ip").length;
+  const exportReason = !data
+    ? "Entries are still loading"
+    : rows.length === 0
+      ? "Nothing to export: no entries yet"
+      : "Nothing to export: no entries match the filters";
 
   return (
-    <div className="ds-page">
+    <div className="flex min-w-0 flex-col gap-6">
       <PageHeader
-        eyebrow="TRUST / ACCOUNTABILITY"
         title="Audit log"
         purpose="Append-only record of every action taken in this project: who did what, to what, and when."
-        actions={
-          <button type="button" className="btn" onClick={exportCsv} disabled={!shown.length}>
-            <Download /> Export CSV
-          </button>
-        }
+        actions={<ExportButton count={shown.length} reason={exportReason} onExport={exportCsv} />}
       />
 
-      <div className="ds-tile-grid">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatTile
           label="Entries"
-          value={rows.length}
-          hint="Retained for the project retention window"
-          tone="healed"
+          value={data ? rows.length : "—"}
+          hint="Kept for the project retention window"
         />
-        <StatTile label="Last 24 h" value={last24} hint="Actions taken today" tone="cache" />
-        <StatTile
-          label="Blocks"
-          value={rows.filter((r) => r.action === "block_ip").length}
-          hint="Source blocks issued"
-          tone="bad"
-        />
+        <StatTile label="Last 24 h" value={data ? last24 : "—"} hint="Actions taken today" />
+        <StatTile label="Blocks" value={data ? blocks : "—"} hint="Source blocks issued" />
         <StatTile
           label="Actors"
-          value={actors.length}
+          value={data ? actors.length : "—"}
           hint="People and system jobs"
-          tone="halted"
         />
       </div>
 
-      <SectionCard title="Entries" detail={`${shown.length} shown`} flush>
-        <div className="ds-filter-bar">
-          <FilterSelect
-            label="Actor"
-            value={actor}
-            onChange={setActor}
-            options={[
-              { value: "all", label: "All actors" },
-              ...actors.map((a) => ({ value: a, label: a })),
-            ]}
-          />
-          <FilterSelect
-            label="Action"
-            value={action}
-            onChange={setAction}
-            options={[
-              { value: "all", label: "All actions" },
-              ...actions.map((a) => ({ value: a, label: a })),
-            ]}
-          />
-          <TextFilter
-            value={q}
-            onChange={setQ}
-            placeholder="Search target or metadata…"
-            label="Search"
-          />
-        </div>
+      <SectionCard
+        title="Entries"
+        detail={
+          data
+            ? filtered
+              ? `${fmtNum(shown.length)} of ${fmtNum(rows.length)}`
+              : `${fmtNum(rows.length)} total`
+            : undefined
+        }
+        flush
+      >
+        {rows.length ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 px-5 pb-3">
+            <TextFilter
+              value={q}
+              onChange={setQ}
+              placeholder="Search target or metadata…"
+              label="Search target or metadata"
+            />
+            <FilterSelect
+              label="Actor"
+              value={actor}
+              onChange={setActor}
+              options={[
+                { value: "all", label: "All actors" },
+                ...actors.map((a) => ({ value: a, label: a })),
+              ]}
+            />
+            <FilterSelect
+              label="Action"
+              value={action}
+              onChange={setAction}
+              options={[
+                { value: "all", label: "All actions" },
+                ...actions.map((a) => ({ value: a, label: a })),
+              ]}
+            />
+            {filtered ? (
+              <Button variant="ghost" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
         {loading && !data ? (
-          <TableSkeleton />
+          <TableSkeleton cols={5} />
         ) : error && !data ? (
-          <ErrorState error={error} onRetry={reload} />
+          <ErrorState error={error} onRetry={reload} what="the audit log" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            icon={ScrollText}
+            title="No actions recorded yet"
+            action={
+              <Button variant="outline" render={<Link href="/incidents" />} nativeButton={false}>
+                Review incidents
+              </Button>
+            }
+          >
+            This log records every block, acknowledgement, key and settings change. It fills in as
+            people and system jobs act on incidents.
+          </EmptyState>
         ) : shown.length === 0 ? (
-          <EmptyState icon={ScrollText} title="No audit entries">
-            Blocks, acknowledgements and settings changes will be recorded here.
+          <EmptyState
+            icon={SearchX}
+            title="No entries match these filters"
+            action={
+              <Button variant="outline" onClick={clearFilters}>
+                Clear filters
+              </Button>
+            }
+          >
+            {q
+              ? `Nothing matches “${q}” for the selected actor and action.`
+              : "No entries for the selected actor and action."}
           </EmptyState>
         ) : (
           <AuditTable rows={shown} onOpen={setOpen} />
@@ -177,11 +231,11 @@ export default function AuditPage() {
       <Drawer open={!!open} onClose={() => setOpen(null)} title={open ? open.action : ""}>
         {open ? (
           <div className="detail-stack">
-            <p style={{ fontSize: 14, fontWeight: 540, margin: 0 }}>{humanizeAudit(open)}</p>
+            <p className="m-0 text-base font-medium text-foreground">{humanizeAudit(open)}</p>
             <dl className="ds-facts">
               <div>
                 <dt>Time</dt>
-                <dd>{preciseStamp(open.at)}</dd>
+                <dd className="tabular-nums">{preciseStamp(open.at)}</dd>
               </div>
               <div>
                 <dt>Actor</dt>
@@ -193,12 +247,14 @@ export default function AuditPage() {
               </div>
               <div>
                 <dt>Source IP</dt>
-                <dd className="mono">{open.ip || "—"}</dd>
+                <dd translate="no" className="font-mono">
+                  {open.ip || "—"}
+                </dd>
               </div>
             </dl>
             <div className="ds-section">
               <h3>Metadata</h3>
-              <CodeBlock>{JSON.stringify(open.metadata, null, 2)}</CodeBlock>
+              <CodeBlock label="Metadata">{JSON.stringify(open.metadata, null, 2)}</CodeBlock>
             </div>
           </div>
         ) : null}

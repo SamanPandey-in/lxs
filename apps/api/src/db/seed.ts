@@ -6,6 +6,7 @@ import { runMigrations } from './migrate.js';
 import { apiKeys, memberships, organizations, projects, users } from './schema.js';
 
 const DEMO_EMAIL = 'demo@lxs.dev';
+const DEMO_USERNAME = 'demo-analyst';
 const DEMO_PASSWORD = 'demo1234';
 
 async function main(): Promise<void> {
@@ -17,11 +18,31 @@ async function main(): Promise<void> {
       .insert(users)
       .values({
         email: DEMO_EMAIL,
-        username: 'demo-analyst',
+        username: DEMO_USERNAME,
         name: 'Demo Analyst',
         passwordHash: await hashPassword(DEMO_PASSWORD),
       })
       .returning();
+  } else if (user.username !== DEMO_USERNAME) {
+    // Volumes created before the demo username existed keep a generated one
+    // (e.g. `user-0389ffde`). Rename it so username login works, unless another
+    // account already owns the name. The password is left untouched.
+    const [taken] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.username, DEMO_USERNAME))
+      .limit(1);
+    if (taken) {
+      console.warn(
+        `  username "${DEMO_USERNAME}" belongs to another user; ${DEMO_EMAIL} keeps "${user.username}"`,
+      );
+    } else {
+      [user] = await db
+        .update(users)
+        .set({ username: DEMO_USERNAME })
+        .where(eq(users.id, user.id))
+        .returning();
+    }
   }
 
   let [org] = await db.select().from(organizations).where(eq(organizations.slug, 'acme')).limit(1);

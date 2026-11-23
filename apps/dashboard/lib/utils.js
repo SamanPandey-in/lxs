@@ -1,5 +1,8 @@
-// Tiny class-name joiner (replaces the `cn` package) + shared formatters.
-export { cn } from "cn";
+// shadcn-standard class merging: later Tailwind classes win over earlier conflicting ones.
+import { clsx } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export const cn = (...inputs) => twMerge(clsx(inputs));
 
 export const fmtNum = (n) => (n == null ? "—" : Number(n).toLocaleString("en-US"));
 

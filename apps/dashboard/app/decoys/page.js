@@ -1,34 +1,106 @@
 "use client";
 import {
   Check,
+  CircleDashed,
   Clock,
   Cpu,
-  FileText,
   Lock,
   Network,
+  Radar,
   ShieldAlert,
-  ShieldCheck,
   X as XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import {
+  Badge,
+  Button,
   CodeBlock,
+  CommandCopy,
   Drawer,
   EmptyState,
   ErrorState,
   PageHeader,
-  Pill,
   StatTile,
+  StatusDot,
   Table,
   TableSkeleton,
   THead,
 } from "@/components/ui";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { RelativeTime, SectionCard } from "@/components/workspace";
 import { api, PROJECT } from "@/lib/core";
 import { useNow, usePolling } from "@/lib/hooks";
 import { fmtNum, relative, stamp } from "@/lib/utils";
 
-const TYPE_TONE = { web: "rejected", ssh: "cache", redis: "drift" };
+const SETUP_CMD = "npx lxs init && docker compose up -d";
+const SELFTEST_CMD = "npx lxs selftest --report";
+
+const SENSOR_STATUS = {
+  online: { tone: "ok", label: "Online" },
+  offline: { tone: "bad", label: "Offline" },
+};
+const sensorStatus = (s) => SENSOR_STATUS[s] || { tone: "warn", label: "Stale" };
+
+function SelftestBadge({ status, n }) {
+  const pass = status === "pass";
+  return (
+    <Badge variant="tag" tone={pass ? "ok" : "bad"}>
+      {pass ? <Check aria-hidden /> : <XIcon aria-hidden />}
+      {pass ? (n != null ? `Passed ${n}/${n}` : "Passed") : "Failed"}
+    </Badge>
+  );
+}
+
+function SensorRow({ d, now }) {
+  const st = sensorStatus(d.status);
+  return (
+    <li className="grid min-w-0 gap-x-6 gap-y-2 px-5 py-3 md:grid-cols-[minmax(0,1fr)_repeat(4,minmax(0,7.5rem))_6rem] md:items-center">
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="text-base font-medium text-foreground">{d.name}</span>
+          <span translate="no" className="font-mono text-xs text-muted-foreground">
+            {d.key ?? d.id}
+          </span>
+          <Badge variant="tag" tone="neutral">
+            {d.type}
+          </Badge>
+        </div>
+        <div className="truncate text-sm text-muted-foreground" title={`${d.persona} · ${d.service}`}>
+          {d.persona} · <span className="font-mono">{d.service}</span>
+        </div>
+      </div>
+      <Meta label="Last event">{relative(d.last_event_at, now)}</Meta>
+      <Meta label="Heartbeat">
+        <span className={d.status === "online" ? undefined : "text-warn"}>
+          {relative(d.last_heartbeat_at, now)}
+        </span>
+      </Meta>
+      <Meta label="Events 24 h">
+        <span className={d.events_24h ? "tabular-nums" : "tabular-nums text-muted-foreground"}>
+          {fmtNum(d.events_24h)}
+        </span>
+      </Meta>
+      <Meta label="Agent">
+        <span translate="no" className="font-mono">
+          {d.agent_version}
+        </span>
+        <span className="text-muted-foreground"> · policy {d.policy_version}</span>
+      </Meta>
+      <div className="md:justify-self-end">
+        <StatusDot tone={st.tone}>{st.label}</StatusDot>
+      </div>
+    </li>
+  );
+}
+
+function Meta({ label, children }) {
+  return (
+    <div className="flex min-w-0 items-baseline gap-2 text-sm md:block">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="min-w-0 truncate text-foreground tabular-nums">{children}</div>
+    </div>
+  );
+}
 
 export default function DecoysPage() {
   const now = useNow(5000);
@@ -37,66 +109,57 @@ export default function DecoysPage() {
   const [report, setReport] = useState(null);
 
   const c = con.data;
-  const pass = c && c.status !== "fail" && c.passed === c.total;
-  const first = c?.containers?.[0]?.declared;
+  const hasReport = Boolean(c?.total > 0 && c.containers?.length);
+  const pass = hasReport && c.status !== "fail" && c.passed === c.total;
+  const first = hasReport ? c.containers[0].declared : null;
+  const noDecoys = !dec.loading && !dec.error && dec.data && dec.data.length === 0;
+
+  const header = (
+    <PageHeader
+      title="Decoys & containment"
+      purpose="Proof the decoys cannot hurt you, and a live look at every sensor. Containment is declared in config and verified by a self-test inside each container."
+    />
+  );
+
+  // One clear state when nothing is deployed yet: no warning banner stacked over it (C1).
+  if (noDecoys) {
+    return (
+      <div className="flex min-w-0 flex-col gap-6">
+        {header}
+        <SectionCard title="Sensors">
+          <EmptyState
+            icon={Radar}
+            title="No decoys registered"
+            action={<CommandCopy cmd={SETUP_CMD} />}
+          >
+            Decoys register themselves on their first heartbeat. Start the decoy stack from your
+            project folder:
+          </EmptyState>
+        </SectionCard>
+      </div>
+    );
+  }
 
   return (
-    <div className="ds-page">
-      <PageHeader
-        eyebrow="DEFENSE / SAFETY PROOF"
-        title="Decoys & containment"
-        purpose="Proof the honeypots cannot hurt you, and a live look at every sensor. Containment is declared in config and verified by a self-test inside each container."
-      />
+    <div className="flex min-w-0 flex-col gap-6">
+      {header}
 
-      {c?.total > 0 ? (
-        <div className="ds-proof" data-tone={pass ? undefined : "bad"}>
-          <span className="vb-ico">
-            {pass ? <ShieldCheck size={20} /> : <ShieldAlert size={20} />}
-          </span>
-          <div style={{ flex: 1 }}>
-            <h2>
-              Containment: {pass ? "PASS" : "FAIL"} ({c.passed}/{c.total})
-            </h2>
-            <div className="dim">
-              Last self-test ran <RelativeTime iso={c.last_run_at} /> ({stamp(c.last_run_at)}).
-              Egress blocked, filesystem read-only, capabilities dropped, no path to production.
-            </div>
-          </div>
-          <button type="button" className="btn" onClick={() => setReport(c.containers[0])}>
-            <FileText /> View report
-          </button>
-        </div>
-      ) : c ? (
-        <div className="ds-proof" data-tone="warn">
-          <span className="vb-ico">
-            <ShieldAlert size={20} />
-          </span>
-          <div style={{ flex: 1 }}>
-            <h2>Containment: NOT RUN</h2>
-            <div className="dim">
-              No sensor has submitted a containment report yet. Start the decoy stack and run
-              <code> npx lxs selftest --report</code> from its configured project.
-            </div>
-          </div>
-        </div>
-      ) : con.loading ? (
-        <TableSkeleton rows={2} />
-      ) : (
-        <ErrorState error={con.error} onRetry={con.reload} />
-      )}
+      {hasReport && !pass ? (
+        <Alert variant="destructive">
+          <ShieldAlert aria-hidden />
+          <AlertTitle className="text-base font-medium">
+            Containment failed: {c.passed} of {c.total} checks passed
+          </AlertTitle>
+          <AlertDescription className="text-sm">
+            Open the failing container's report below and fix its declared posture before exposing
+            the decoys.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {first ? (
-        <div className="ds-tile-grid">
-          <StatTile
-            label="Network mode"
-            value={
-              <span style={{ fontSize: 15, lineHeight: 1.5, display: "block", marginTop: 12 }}>
-                {first.network_mode}
-              </span>
-            }
-            tone="ok"
-            icon={Network}
-          />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTile label="Network mode" value={first.network_mode} tone="ok" icon={Network} />
           <StatTile
             label="Root filesystem"
             value={first.read_only === false ? "Writable" : first.read_only ? "Read-only" : "—"}
@@ -112,14 +175,121 @@ export default function DecoysPage() {
             icon={Cpu}
           />
           <StatTile
-            label="Last run"
+            label="Last self-test"
             value={relative(c.last_run_at, now)}
             hint={stamp(c.last_run_at)}
-            tone="healed"
             icon={Clock}
           />
         </div>
       ) : null}
+
+      <SectionCard
+        title="Containment"
+        detail={
+          hasReport ? (
+            <>
+              Declared posture vs the last self-test, run <RelativeTime iso={c.last_run_at} />
+            </>
+          ) : (
+            "Declared posture vs the last self-test"
+          )
+        }
+        action={
+          hasReport ? (
+            <StatusDot tone={pass ? "ok" : "bad"}>
+              {pass ? "Passed" : "Failed"} {c.passed}/{c.total}
+            </StatusDot>
+          ) : c ? (
+            <StatusDot tone="neutral">Not run</StatusDot>
+          ) : null
+        }
+        flush
+      >
+        {con.loading && !c ? (
+          <TableSkeleton rows={3} cols={6} />
+        ) : con.error && !c ? (
+          <ErrorState error={con.error} onRetry={con.reload} what="the containment report" />
+        ) : !hasReport ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-border px-5 py-3 text-sm">
+            <CircleDashed className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <span className="text-muted-foreground">
+              No sensor has submitted a containment report yet. Run the self-test:
+            </span>
+            <CommandCopy cmd={c?.command || SELFTEST_CMD} />
+          </div>
+        ) : (
+          <>
+            <Table>
+              <THead
+                cols={[
+                  "Container",
+                  "Network",
+                  "Read-only",
+                  "Caps",
+                  "User",
+                  "Limits",
+                  "Self-test",
+                  "Last run",
+                  "",
+                ]}
+              />
+              <tbody>
+                {c.containers.map((k) => (
+                  <tr key={k.container}>
+                    <td translate="no" className="font-mono">
+                      {k.container}
+                    </td>
+                    <td>{k.declared.network_mode}</td>
+                    <td>
+                      {k.declared.read_only === true ? (
+                        <Badge variant="tag" tone="ok">
+                          Yes
+                        </Badge>
+                      ) : k.declared.read_only === false ? (
+                        <Badge variant="tag" tone="bad">
+                          No
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="font-mono">drop {k.declared.cap_drop}</td>
+                    <td className="font-mono">{k.declared.user}</td>
+                    <td className="font-mono tabular-nums">
+                      {k.declared.mem_limit} · {k.declared.pids_limit} pids
+                    </td>
+                    <td>
+                      <SelftestBadge
+                        status={k.selftest.status}
+                        n={k.selftest.status === "pass" ? k.selftest.checks.length : null}
+                      />
+                    </td>
+                    <td className="whitespace-nowrap tabular-nums">
+                      <RelativeTime iso={k.selftest.run_at} />
+                    </td>
+                    <td className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setReport(k)}
+                        aria-label={`View self-test report for ${k.container}`}
+                      >
+                        View report
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </Table>
+            <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-t border-border px-5 py-3 text-sm">
+              <span className="text-muted-foreground">
+                Re-run the self-test. It posts a signed report and this page refreshes:
+              </span>
+              <CommandCopy cmd={c.command || SELFTEST_CMD} />
+            </div>
+          </>
+        )}
+      </SectionCard>
 
       <SectionCard
         title="Sensors"
@@ -127,140 +297,16 @@ export default function DecoysPage() {
         flush
       >
         {dec.loading && !dec.data ? (
-          <TableSkeleton />
+          <TableSkeleton cols={6} />
         ) : dec.error && !dec.data ? (
-          <ErrorState error={dec.error} onRetry={dec.reload} />
-        ) : !dec.data?.length ? (
-          <EmptyState title="No decoys registered">
-            Run <code>npx lxs init</code> and <code>docker compose up</code>. Decoys register
-            themselves on first heartbeat.
-          </EmptyState>
+          <ErrorState error={dec.error} onRetry={dec.reload} what="sensors" />
         ) : (
-          <div>
+          <ul className="m-0 list-none divide-y divide-border border-t border-border p-0">
             {dec.data.map((d) => (
-              <div
-                className="health-row"
-                key={d.id}
-                style={{ padding: "12px 16px", flexWrap: "wrap" }}
-              >
-                <span
-                  className={`health-dot ${d.status === "online" ? "is-live" : d.status === "offline" ? "is-offline" : "is-pending"}`}
-                />
-                <div style={{ flex: "1 1 260px", minWidth: 0 }}>
-                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                    <strong>{d.name}</strong>
-                    <span className="mono dim">{d.id}</span>
-                    <Pill tone={TYPE_TONE[d.type] || "halted"}>{d.type}</Pill>
-                  </div>
-                  <div className="ds-res-meta">
-                    {d.persona} · <span className="mono">{d.service}</span>
-                  </div>
-                </div>
-                <div className="ds-res-meta" style={{ flex: "0 0 150px" }}>
-                  Last event
-                  <br />
-                  <strong style={{ color: "var(--text)" }}>{relative(d.last_event_at, now)}</strong>
-                </div>
-                <div className="ds-res-meta" style={{ flex: "0 0 150px" }}>
-                  Heartbeat
-                  <br />
-                  <strong style={{ color: d.status === "online" ? "var(--text)" : "var(--drift)" }}>
-                    {relative(d.last_heartbeat_at, now)}
-                  </strong>
-                </div>
-                <div className="ds-res-meta" style={{ flex: "0 0 120px" }}>
-                  Events 24 h<br />
-                  <strong className="num" style={{ color: "var(--text)" }}>
-                    {fmtNum(d.events_24h)}
-                  </strong>
-                </div>
-                <div className="ds-res-meta" style={{ flex: "0 0 110px" }}>
-                  Agent
-                  <br />
-                  <span className="mono">{d.agent_version}</span> · policy {d.policy_version}
-                </div>
-                <Pill
-                  tone={d.status === "online" ? "ok" : d.status === "offline" ? "bad" : "drift"}
-                >
-                  {d.status === "online" ? "Online" : d.status === "offline" ? "Offline" : "Stale"}
-                </Pill>
-              </div>
+              <SensorRow key={d.id} d={d} now={now} />
             ))}
-          </div>
+          </ul>
         )}
-      </SectionCard>
-
-      <SectionCard
-        title="Declared posture vs self-test"
-        detail="What the manifest promises, and what the last self-test measured"
-        flush
-      >
-        {c ? (
-          <Table>
-            <THead
-              cols={[
-                "Container",
-                "Network",
-                "Read-only",
-                "Caps",
-                "User",
-                "Limits",
-                "Self-test",
-                "Last run",
-                "",
-              ]}
-            />
-            <tbody>
-              {c.containers.map((k) => (
-                <tr key={k.container}>
-                  <td className="mono">{k.container}</td>
-                  <td>{k.declared.network_mode}</td>
-                  <td>
-                    {k.declared.read_only === true ? (
-                      <Pill tone="ok">yes</Pill>
-                    ) : k.declared.read_only === false ? (
-                      <Pill tone="bad">no</Pill>
-                    ) : (
-                      <span className="faint">—</span>
-                    )}
-                  </td>
-                  <td className="mono">drop {k.declared.cap_drop}</td>
-                  <td className="mono">{k.declared.user}</td>
-                  <td className="mono">
-                    {k.declared.mem_limit} · {k.declared.pids_limit} pids
-                  </td>
-                  <td>
-                    <Pill
-                      tone={k.selftest.status === "pass" ? "ok" : "bad"}
-                      icon={k.selftest.status === "pass" ? Check : XIcon}
-                    >
-                      {k.selftest.status === "pass"
-                        ? `${k.selftest.checks.length}/${k.selftest.checks.length} pass`
-                        : "fail"}
-                    </Pill>
-                  </td>
-                  <td>
-                    <RelativeTime iso={k.selftest.run_at} />
-                  </td>
-                  <td>
-                    <button type="button" className="btn btn-sm" onClick={() => setReport(k)}>
-                      Report
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        ) : (
-          <TableSkeleton rows={3} />
-        )}
-      </SectionCard>
-
-      <SectionCard
-        title="Run the self-test yourself"
-        detail="Posts a signed report back to the platform and refreshes this page"
-      >
-        <CodeBlock>{c?.command || "npx lxs selftest --project acme-shop --report"}</CodeBlock>
       </SectionCard>
 
       <Drawer
@@ -274,14 +320,12 @@ export default function DecoysPage() {
               <div>
                 <dt>Result</dt>
                 <dd>
-                  <Pill tone={report.selftest.status === "pass" ? "ok" : "bad"}>
-                    {report.selftest.status.toUpperCase()}
-                  </Pill>
+                  <SelftestBadge status={report.selftest.status} />
                 </dd>
               </div>
               <div>
                 <dt>Run at</dt>
-                <dd>{stamp(report.selftest.run_at)}</dd>
+                <dd className="tabular-nums">{stamp(report.selftest.run_at)}</dd>
               </div>
               <div>
                 <dt>Network</dt>
@@ -289,31 +333,28 @@ export default function DecoysPage() {
               </div>
               <div>
                 <dt>User</dt>
-                <dd className="mono">{report.declared.user}</dd>
+                <dd className="font-mono">{report.declared.user}</dd>
               </div>
             </dl>
             <div className="ds-section">
               <h3>Checks</h3>
-              <ul className="ds-list" style={{ gap: 10 }}>
+              <ul className="m-0 flex list-none flex-col gap-3 p-0">
                 {report.selftest.checks.map((k) => (
-                  <li key={k.name} style={{ alignItems: "flex-start" }}>
-                    <Pill
-                      tone={k.status === "pass" ? "ok" : "bad"}
-                      icon={k.status === "pass" ? Check : XIcon}
-                    >
-                      {k.status}
-                    </Pill>
-                    <div>
-                      <div style={{ fontWeight: 560 }}>{k.name}</div>
-                      <div className="mono dim" style={{ fontSize: 11.5 }}>
-                        {k.detail}
-                      </div>
+                  <li key={k.name} className="flex min-w-0 items-start gap-3">
+                    <SelftestBadge status={k.status} />
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">{k.name}</div>
+                      {k.detail ? (
+                        <div className="font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                          {k.detail}
+                        </div>
+                      ) : null}
                     </div>
                   </li>
                 ))}
               </ul>
             </div>
-            <CodeBlock>{JSON.stringify(report, null, 2)}</CodeBlock>
+            <CodeBlock label="Raw report">{JSON.stringify(report, null, 2)}</CodeBlock>
           </div>
         ) : null}
       </Drawer>

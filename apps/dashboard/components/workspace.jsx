@@ -1,26 +1,21 @@
 "use client";
-import { Coins, KeyRound, Search, ShieldBan } from "lucide-react";
+import { ShieldBan } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { api, PROJECT } from "@/lib/core";
-import { useNow } from "@/lib/hooks";
+import { useEffect, useState } from "react";
+import { activeProjectName, api, PROJECT } from "@/lib/core";
 import { EVENT_LABEL, eventTone } from "@/lib/labels";
 import { toast } from "@/lib/toast";
-import { clock, relative, stamp } from "@/lib/utils";
-import { KillMini } from "./killchain";
+import { clock, cn, stamp } from "@/lib/utils";
+import { IncidentQueue } from "./incidents-table";
+import { Badge, Card, Field, Modal, RelativeTime, SearchInput, Select } from "./ui";
 import {
-  Card,
-  Field,
-  LabelPill,
-  Modal,
-  Pill,
-  SeverityPill,
-  StatusPill,
   Table,
-  TechChip,
-  THead,
-} from "./ui";
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "./ui/table";
 
 export { stamp, clock };
 export { duration } from "@/lib/utils";
@@ -33,14 +28,8 @@ export function SectionCard({ title, detail, action, children, flush }) {
   );
 }
 
-export function RelativeTime({ iso }) {
-  const now = useNow(5000);
-  return (
-    <time dateTime={iso} title={iso ? new Date(iso).toLocaleString() : ""}>
-      {relative(iso, now)}
-    </time>
-  );
-}
+// RelativeTime lives in ui.jsx (shared with components/incidents-table); re-exported here.
+export { RelativeTime };
 
 export function RouteLink({ href, children, className = "table-link" }) {
   return (
@@ -51,33 +40,28 @@ export function RouteLink({ href, children, className = "table-link" }) {
   );
 }
 
+// Shared filter controls: thin adapters over the design-system components (agents/ui/components.md).
 export function FilterSelect({ label, value, onChange, options }) {
   return (
-    <div className="filter-field">
-      <label>{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}>
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    <Select
+      value={value}
+      onValueChange={onChange}
+      options={options}
+      aria-label={label}
+      className="w-auto min-w-40"
+    />
   );
 }
 
 export function TextFilter({ value, onChange, placeholder = "Search…", label = "Search" }) {
   return (
-    <div className="ds-filter-search">
-      <Search aria-hidden />
-      <input
-        type="search"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        aria-label={label}
-      />
-    </div>
+    <SearchInput
+      value={value}
+      onValueChange={onChange}
+      placeholder={placeholder}
+      aria-label={label}
+      className="min-w-0 flex-1 sm:max-w-sm"
+    />
   );
 }
 
@@ -107,103 +91,68 @@ export function describeEvent(e) {
   }
 }
 
-export function EventDot({ e }) {
-  return <span className="ds-dot" data-tone={eventTone(e)} />;
-}
+// Event tone (lib/labels eventTone) → token colour utilities from @theme inline (globals.css).
+const EVENT_DOT = {
+  bad: "bg-bad",
+  drift: "bg-warn",
+  rejected: "bg-rejected",
+  ok: "bg-ok",
+  halted: "bg-halted",
+};
 
-/* ───────── Incidents table ───────── */
-export function IncidentsTable({ incidents, emptyHint }) {
-  const router = useRouter();
-  if (!incidents.length) return null;
-  const open = (id) => router.push(`/incidents/${id}`);
+/** 8 px decorative dot coloured by the event's tone. Pass `e` (an event) or a `tone` directly. */
+export function EventDot({ e, tone, className }) {
+  const t = tone ?? (e ? eventTone(e) : "halted");
   return (
-    <Table>
-      <THead
-        cols={[
-          "Severity",
-          { label: "Score", num: true },
-          "Incident",
-          "Kill chain",
-          "ATT&CK",
-          "Last activity",
-          "Status",
-        ]}
-      />
-      <tbody>
-        {incidents.map((i) => (
-          <tr
-            key={i.id}
-            className="interactive-row"
-            tabIndex={0}
-            onClick={() => open(i.id)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") open(i.id);
-            }}
-          >
-            <td>
-              <SeverityPill severity={i.severity} />
-            </td>
-            <td className="num">
-              <strong>{i.score}</strong>
-            </td>
-            <td style={{ minWidth: 330, maxWidth: 420 }}>
-              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                <Link
-                  href={`/incidents/${i.id}`}
-                  className="table-link"
-                  prefetch={false}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  #{i.number} {i.title}
-                </Link>
-              </div>
-              <span className="table-sub row" style={{ gap: 6, flexWrap: "wrap", marginTop: 3 }}>
-                <span className="mono">{i.src_ip}</span>
-                <LabelPill label={i.label} />
-                {i.real_asset_reached ? (
-                  <Pill tone="bad" icon={Coins}>
-                    Real asset
-                  </Pill>
-                ) : null}
-                {i.honeytoken_used ? (
-                  <Pill tone="bad" icon={KeyRound}>
-                    Honeytoken
-                  </Pill>
-                ) : null}
-              </span>
-            </td>
-            <td>
-              <KillMini stages={i.stages} severity={i.severity} />
-            </td>
-            <td>
-              <div className="row incident-techniques">
-                {i.techniques.slice(0, 4).map((t) => (
-                  <TechChip key={t} id={t} link={false} />
-                ))}
-                {i.techniques.length > 4 ? (
-                  <span className="chip" title={i.techniques.slice(4).join(", ")}>
-                    +{i.techniques.length - 4}
-                  </span>
-                ) : null}
-              </div>
-            </td>
-            <td style={{ whiteSpace: "nowrap" }}>
-              <RelativeTime iso={i.last_event_at} />
-            </td>
-            <td>
-              <StatusPill status={i.status} />
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <span
+      aria-hidden
+      data-tone={t}
+      className={cn("size-2 shrink-0 rounded-full", EVENT_DOT[t] ?? EVENT_DOT.halted, className)}
+    />
   );
 }
 
+/* ───────── Incidents table ───────── */
+/**
+ * Incident list with real row links (table ≥ md, cards < md). Same component as the incident
+ * queue (components/incidents-table.jsx). Render inside `<Card flush>`.
+ */
+// biome-ignore lint/correctness/noUnusedFunctionParameters: emptyHint kept for API compatibility
+export function IncidentsTable({ incidents, emptyHint }) {
+  if (!incidents?.length) return null;
+  return <IncidentQueue incidents={incidents} />;
+}
+
 /* ───────── Block / unblock confirm modals ───────── */
+
+/** Name of the active project for confirm copy; "this project" until (or unless) it resolves. */
+function useProjectName(active) {
+  const [name, setName] = useState(null);
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    activeProjectName().then((n) => {
+      if (live) setName(n);
+    });
+    return () => {
+      live = false;
+    };
+  }, [active]);
+  return name;
+}
+
+const DURATIONS = [
+  { value: "1", label: "1 hour" },
+  { value: "24", label: "24 hours" },
+  { value: "168", label: "7 days" },
+  { value: "720", label: "30 days" },
+];
+const durationLabel = (h) => DURATIONS.find((d) => d.value === h)?.label ?? `${h} h`;
+
 export function BlockModal({ open, onClose, ip, incident, onDone }) {
   const [hours, setHours] = useState("24");
   const [busy, setBusy] = useState(false);
+  const project = useProjectName(open);
   const submit = async () => {
     setBusy(true);
     try {
@@ -223,7 +172,7 @@ export function BlockModal({ open, onClose, ip, incident, onDone }) {
       toast(
         `Block applied. ${ip} will be refused on its next request`,
         "success",
-        `Blocked for ${hours} h · written to the audit log`,
+        `Blocked for ${durationLabel(hours)} · written to the audit log`,
       );
       onDone?.();
       onClose();
@@ -240,35 +189,44 @@ export function BlockModal({ open, onClose, ip, incident, onDone }) {
       title={`Block ${ip}?`}
       actions={[
         {
-          label: busy ? "Blocking…" : `Block for ${hours} h`,
+          label: `Block for ${durationLabel(hours)}`,
           tone: "danger",
           onClick: submit,
-          disabled: busy,
+          busy,
         },
       ]}
     >
-      <p>
-        <strong style={{ color: "var(--text)" }}>{ip}</strong> will be added to the project
-        blocklist and pushed to every sensor and the app middleware in{" "}
-        <strong style={{ color: "var(--text)" }}>Acme Shop</strong>. Its next request will be
-        refused. One row is written to the audit log.
-      </p>
-      <div style={{ marginTop: 12 }}>
+      <div className="flex min-w-0 flex-col gap-3">
+        <p className="m-0">
+          <strong className="font-medium text-foreground [overflow-wrap:anywhere]">{ip}</strong>{" "}
+          will be added to the project blocklist and pushed to every sensor and the app middleware
+          in{" "}
+          {project ? (
+            <strong className="font-medium text-foreground">{project}</strong>
+          ) : (
+            "this project"
+          )}
+          . Its next request will be refused. One row is written to the audit log.
+        </p>
         <Field label="Duration" htmlFor="blk-dur">
-          <select id="blk-dur" value={hours} onChange={(e) => setHours(e.target.value)}>
-            <option value="1">1 hour</option>
-            <option value="24">24 hours</option>
-            <option value="168">7 days</option>
-            <option value="720">30 days</option>
-          </select>
+          <Select
+            id="blk-dur"
+            name="duration"
+            value={hours}
+            onValueChange={setHours}
+            options={DURATIONS}
+            className="w-full"
+          />
         </Field>
       </div>
     </Modal>
   );
 }
 
+/** Destructive confirm: lifting a block lets the source reach the decoys and the app again. */
 export function UnblockModal({ open, onClose, ip, onConfirm }) {
   const [busy, setBusy] = useState(false);
+  const project = useProjectName(open);
   return (
     <Modal
       open={open}
@@ -276,9 +234,9 @@ export function UnblockModal({ open, onClose, ip, onConfirm }) {
       title={`Unblock ${ip}?`}
       actions={[
         {
-          label: busy ? "Unblocking…" : "Unblock",
-          tone: "primary",
-          disabled: busy,
+          label: "Unblock source",
+          tone: "danger",
+          busy,
           onClick: async () => {
             setBusy(true);
             try {
@@ -291,62 +249,89 @@ export function UnblockModal({ open, onClose, ip, onConfirm }) {
         },
       ]}
     >
-      <p>
-        Unblock <strong style={{ color: "var(--text)" }}>{ip}</strong> in{" "}
-        <strong style={{ color: "var(--text)" }}>Acme Shop</strong>? Traffic from this source will
-        be allowed again and the decoys will keep scoring it.
+      <p className="m-0">
+        Traffic from{" "}
+        <strong className="font-medium text-foreground [overflow-wrap:anywhere]">{ip}</strong> will
+        reach the decoys and the app in{" "}
+        {project ? <strong className="font-medium text-foreground">{project}</strong> : "this project"}{" "}
+        again from the next policy poll. The decoys keep scoring it. One row is written to the
+        audit log.
       </p>
     </Modal>
   );
 }
 
 /* ───────── Audit table ───────── */
+
+// Audit actions → semantic tag tones. Blocks are a destructive *action* (tag "bad"), never a
+// severity fill; incident workflow is info; unblock is ok; everything else neutral.
+function actionTone(action = "") {
+  if (action === "unblock_ip" || action.includes("unblock")) return "ok";
+  if (action.includes("block") || action.includes("revoke") || action.includes("delete"))
+    return "bad";
+  if (action.startsWith("incident")) return "info";
+  return "neutral";
+}
+
+/**
+ * Audit log rows. The time cell holds a real <button> stretched over the row (after:inset-0),
+ * so the whole row opens the entry via `onOpen(row)` with a visible keyboard focus ring.
+ */
 export function AuditTable({ rows, onOpen }) {
   return (
-    <Table>
-      <THead cols={["Time", "Actor", "Action", "Target", "Metadata"]} />
-      <tbody>
-        {rows.map((r) => (
-          <tr
-            key={r.id}
-            className="interactive-row"
-            tabIndex={0}
-            onClick={() => onOpen(r)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onOpen(r);
-              }
-            }}
-          >
-            <td style={{ whiteSpace: "nowrap" }} className="mono">
-              {stamp(r.at)}
-            </td>
-            <td>{r.actor === "system" ? <Pill tone="halted">system</Pill> : r.actor}</td>
-            <td>
-              <Pill
-                tone={
-                  r.action.includes("block") && !r.action.includes("unblock")
-                    ? "bad"
-                    : r.action.startsWith("incident")
-                      ? "cache"
-                      : r.action === "unblock_ip"
-                        ? "ok"
-                        : "halted"
-                }
-              >
-                {r.action}
-              </Pill>
-            </td>
-            <td>{r.target}</td>
-            <td>
-              <div className="cell-clip mono" style={{ maxWidth: 300 }}>
-                {JSON.stringify(r.metadata)}
-              </div>
-            </td>
-          </tr>
-        ))}
-      </tbody>
+    <Table inset>
+      <TableHeader>
+        <TableRow className="hover:bg-transparent">
+          <TableHead scope="col">Time</TableHead>
+          <TableHead scope="col">Actor</TableHead>
+          <TableHead scope="col">Action</TableHead>
+          <TableHead scope="col">Target</TableHead>
+          <TableHead scope="col">Metadata</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((r) => {
+          const meta = JSON.stringify(r.metadata ?? {});
+          return (
+            <TableRow key={r.id} className="relative h-11 has-[button:focus-visible]:bg-muted/50">
+              <TableCell className="whitespace-nowrap font-mono tabular-nums">
+                <button
+                  type="button"
+                  onClick={() => onOpen(r)}
+                  aria-label={`Open audit entry: ${r.action} on ${r.target || "—"} at ${stamp(r.at)}`}
+                  className="cursor-pointer text-left outline-none after:absolute after:inset-0 after:rounded-sm focus-visible:after:outline-2 focus-visible:after:outline-solid focus-visible:after:-outline-offset-2 focus-visible:after:outline-ring"
+                >
+                  {stamp(r.at)}
+                </button>
+              </TableCell>
+              <TableCell>
+                {r.actor === "system" ? (
+                  <Badge variant="tag" tone="neutral">
+                    System
+                  </Badge>
+                ) : (
+                  <span className="[overflow-wrap:anywhere]">{r.actor}</span>
+                )}
+              </TableCell>
+              <TableCell>
+                <Badge variant="tag" tone={actionTone(r.action)} className="font-mono">
+                  {r.action}
+                </Badge>
+              </TableCell>
+              <TableCell className="[overflow-wrap:anywhere]">{r.target || "—"}</TableCell>
+              <TableCell className="max-w-0 w-full">
+                <span
+                  className="block truncate font-mono text-xs text-muted-foreground"
+                  title={meta}
+                  translate="no"
+                >
+                  {meta}
+                </span>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
     </Table>
   );
 }

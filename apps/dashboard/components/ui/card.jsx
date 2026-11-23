@@ -1,12 +1,16 @@
-import { cn } from "cn";
+import { cn } from "@/lib/utils";
 
+/*
+ * rounded-xl, 1 px border, shadow-card (light) / 1 px top inner highlight (dark).
+ * A Card nested in a Card becomes a borderless `bg-muted/40` well (no double borders).
+ */
 function Card({ className, size = "default", ...props }) {
   return (
     <div
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        "group/card flex min-w-0 flex-col gap-(--card-spacing) overflow-hidden rounded-xl border border-border bg-card py-(--card-spacing) shadow-card dark:shadow-[inset_0_1px_0_rgb(255_255_255/0.04)] text-base text-card-foreground [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 in-data-[slot=card]:border-0 in-data-[slot=card]:bg-muted/40 in-data-[slot=card]:shadow-none dark:in-data-[slot=card]:shadow-none data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className,
       )}
       {...props}
@@ -19,7 +23,7 @@ function CardHeader({ className, ...props }) {
     <div
       data-slot="card-header"
       className={cn(
-        "group/card-header @container/card-header grid auto-rows-min items-start gap-1 rounded-t-xl px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
+        "group/card-header @container/card-header grid min-w-0 auto-rows-min items-start gap-1 rounded-t-xl px-(--card-spacing) has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto] [.border-b]:pb-(--card-spacing)",
         className,
       )}
       {...props}
@@ -32,7 +36,7 @@ function CardTitle({ className, ...props }) {
     <div
       data-slot="card-title"
       className={cn(
-        "font-heading text-base leading-snug font-medium group-data-[size=sm]/card:text-sm",
+        "font-heading text-base font-semibold tracking-tight",
         className,
       )}
       {...props}
@@ -62,7 +66,7 @@ function CardAction({ className, ...props }) {
 
 function CardContent({ className, ...props }) {
   return (
-    <div data-slot="card-content" className={cn("px-(--card-spacing)", className)} {...props} />
+    <div data-slot="card-content" className={cn("min-w-0 px-(--card-spacing)", className)} {...props} />
   );
 }
 
