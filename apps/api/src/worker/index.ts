@@ -3,16 +3,19 @@ import {
   type AssessIncidentJob,
   getBoss,
   type NarrateIncidentJob,
+  type NotifyIncidentJob,
   type ProcessEventsJob,
   QUEUES,
   setInProcessAssessor,
   setInProcessNarrator,
+  setInProcessNotifier,
   setInProcessProcessor,
 } from '../jobs/queue.js';
 import { assessIncident } from './assess-incident.js';
 import { loadDetection } from './detection.js';
 import { autoCloseNoise, blocklistExpiry, retentionPurge, sensorStaleness } from './maintenance.js';
 import { llmConfig, narrateIncident } from './narrator.js';
+import { notifyIncident } from './notify-incident.js';
 import { processEvents } from './process-events.js';
 
 const timers: NodeJS.Timeout[] = [];
@@ -24,6 +27,7 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
   setInProcessProcessor(processEvents);
   setInProcessNarrator(narrateIncident);
   setInProcessAssessor(assessIncident);
+  setInProcessNotifier(notifyIncident);
   log.info(
     llmConfig
       ? `worker: LLM narrator on (${llmConfig.provider}, ${llmConfig.model})`
@@ -51,6 +55,10 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
     await boss.work<AssessIncidentJob>(QUEUES.assessIncident, async (jobs) => {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
         await assessIncident((j as { data: AssessIncidentJob }).data.incidentId);
+    });
+    await boss.work<NotifyIncidentJob>(QUEUES.notifyIncident, async (jobs) => {
+      for (const j of Array.isArray(jobs) ? jobs : [jobs])
+        await notifyIncident((j as { data: NotifyIncidentJob }).data.incidentId);
     });
     const cron = async (queue: string, expr: string, fn: () => Promise<unknown>) => {
       await boss.schedule(queue, expr);

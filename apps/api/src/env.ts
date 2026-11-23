@@ -5,6 +5,9 @@ const bool = z
   .optional()
   .transform((v) => v === 'true' || v === '1');
 
+/** Dev-only fallback; refused in production. Not 32 bytes of key material by itself: see parseEncryptionKey. */
+export const DEV_ENCRYPTION_KEY = 'dev-only-encryption-key-change-me';
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   ROLE: z.enum(['api', 'worker', 'all']).default('all'),
@@ -13,6 +16,12 @@ const EnvSchema = z.object({
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DATABASE_URL: z.string().min(1).default('postgres://lxs:lxs@localhost:5432/lxs'),
   SESSION_SECRET: z.string().min(16).default('dev-only-session-secret-change-me'),
+  // 32 bytes, base64 or hex. Encrypts notification channel URLs and signing secrets.
+  ENCRYPTION_KEY: z.string().min(1).default(DEV_ENCRYPTION_KEY),
+  // Base URL of the dashboard, used for incident links in alerts.
+  DASHBOARD_URL: z.string().url().default('http://localhost:3000'),
+  // Development only: let alerts reach private/loopback receivers (local test webhooks).
+  NOTIFY_ALLOW_PRIVATE: bool,
   SESSION_TTL_HOURS: z.coerce
     .number()
     .int()
@@ -53,9 +62,35 @@ const EnvSchema = z.object({
   // Provider calls per project per UTC day; past it, incidents get the template.
   LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(200),
   LLM_DEBOUNCE_SECONDS: z.coerce.number().int().nonnegative().default(15),
+  // Identity and tenancy. APP_URL is the dashboard origin used in emailed links.
+  APP_URL: z.string().url().default('http://localhost:3000'),
+  // console: log the mail (dev). resend: Resend HTTP API. smtp: not bundled yet (see lib/mailer.ts).
+  MAIL_TRANSPORT: z.enum(['console', 'resend', 'smtp']).default('console'),
+  MAIL_FROM: z.string().min(3).default('LXS <no-reply@lxs.dev>'),
+  RESEND_API_KEY: z.string().optional(),
+  SMTP_URL: z.string().optional(),
+  // Bot check on signup and password-reset requests. none = off (default).
+  CAPTCHA_PROVIDER: z.enum(['none', 'turnstile']).default('none'),
+  TURNSTILE_SITE_KEY: z.string().optional(),
+  TURNSTILE_SECRET_KEY: z.string().optional(),
+  // Abuse limits (H1): per-organization caps and the signup rate per client IP.
+  MAX_PROJECTS_PER_ORG: z.coerce.number().int().positive().default(5),
+  MAX_KEYS_PER_ORG: z.coerce.number().int().positive().default(10),
+  SIGNUP_RATE_PER_HOUR: z.coerce.number().int().positive().default(10),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
+
+/** 32 raw bytes from 64 hex chars or base64/base64url, else null. */
+export function decodeKey32(v: string): Buffer | null {
+  const s = v.trim();
+  if (/^[0-9a-fA-F]{64}$/.test(s)) return Buffer.from(s, 'hex');
+  if (/^[A-Za-z0-9+/_-]{43}={0,1}$/.test(s)) {
+    const b = Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+    if (b.length === 32) return b;
+  }
+  return null;
+}
 
 function load(): Env {
   const parsed = EnvSchema.safeParse(process.env);
@@ -70,11 +105,36 @@ function load(): Env {
     console.error('SESSION_SECRET must be set in production');
     process.exit(1);
   }
+  if (env.NODE_ENV === 'production' && env.ENCRYPTION_KEY === DEV_ENCRYPTION_KEY) {
+    console.error('ENCRYPTION_KEY must be set in production (32 bytes, base64 or hex)');
+    process.exit(1);
+  }
+  if (env.ENCRYPTION_KEY !== DEV_ENCRYPTION_KEY && !decodeKey32(env.ENCRYPTION_KEY)) {
+    console.error('ENCRYPTION_KEY must decode to exactly 32 bytes (base64 or 64 hex chars)');
+    process.exit(1);
+  }
+  if (env.NODE_ENV === 'production' && env.NOTIFY_ALLOW_PRIVATE) {
+    console.error('NOTIFY_ALLOW_PRIVATE is not allowed in production');
+    process.exit(1);
+  }
   if (
     env.DEV_AUTH_BYPASS &&
     (env.NODE_ENV !== 'development' || !['127.0.0.1', '::1', 'localhost'].includes(env.HOST))
   ) {
     console.error('DEV_AUTH_BYPASS is allowed only in development when HOST is loopback');
+    process.exit(1);
+  }
+  if (env.MAIL_TRANSPORT === 'resend' && !env.RESEND_API_KEY) {
+    console.error('MAIL_TRANSPORT=resend requires RESEND_API_KEY');
+    process.exit(1);
+  }
+  if (
+    env.CAPTCHA_PROVIDER === 'turnstile' &&
+    !(env.TURNSTILE_SECRET_KEY && env.TURNSTILE_SITE_KEY)
+  ) {
+    console.error(
+      'CAPTCHA_PROVIDER=turnstile requires TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY',
+    );
     process.exit(1);
   }
   return env;

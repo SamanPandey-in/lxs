@@ -21,6 +21,7 @@ async function main(): Promise<void> {
         username: DEMO_USERNAME,
         name: 'Demo Analyst',
         passwordHash: await hashPassword(DEMO_PASSWORD),
+        emailVerifiedAt: new Date(),
       })
       .returning();
   } else if (user.username !== DEMO_USERNAME) {
@@ -43,6 +44,15 @@ async function main(): Promise<void> {
         .where(eq(users.id, user.id))
         .returning();
     }
+  }
+
+  // The demo account must never be locked out of key creation by email verification.
+  if (!user!.emailVerifiedAt) {
+    [user] = await db
+      .update(users)
+      .set({ emailVerifiedAt: new Date() })
+      .where(eq(users.id, user!.id))
+      .returning();
   }
 
   let [org] = await db.select().from(organizations).where(eq(organizations.slug, 'acme')).limit(1);

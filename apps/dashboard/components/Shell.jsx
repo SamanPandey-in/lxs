@@ -35,10 +35,12 @@ import { cn } from "@/lib/utils";
 import { getAllowMock, loadConfig } from "../lib/config";
 import { api, coreUrl, resolveProject, setActiveProject } from "../lib/core";
 import { useApiProblem, useDemo } from "../lib/hooks";
+import { setMe } from "../lib/identity";
 import { isActive, NAV, NAV_ITEMS } from "../lib/nav";
 import { useStore } from "../lib/store";
 import { CommandPalette, Kbd, useModKeyLabel, usePaletteShortcut } from "./command-palette";
 import { PageSkeleton } from "./ui";
+import { VerifyEmailBanner } from "./verify-email-banner";
 
 /*
  * App shell (agents/ui/layout.md → The shell, visual-language.md §1).
@@ -55,7 +57,15 @@ import { PageSkeleton } from "./ui";
  * The shell renders immediately; the session check happens inside the content area.
  */
 
-const PUBLIC = new Set(["/", "/login", "/signup"]);
+const PUBLIC = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
+]);
+const isPublic = (path) => PUBLIC.has(path) || path?.startsWith("/invite/");
 const OPEN = new Set(["open", "acknowledged"]);
 
 const focusRing =
@@ -63,7 +73,7 @@ const focusRing =
 
 export default function Shell({ children }) {
   const path = usePathname();
-  if (PUBLIC.has(path)) return children;
+  if (isPublic(path)) return children;
   return <AppShell path={path}>{children}</AppShell>;
 }
 
@@ -89,7 +99,10 @@ function useSession(path) {
           setState("authenticated");
           response
             .json()
-            .then((body) => active && setUser(body?.user ?? null))
+            .then((body) => {
+              setMe(body);
+              if (active) setUser(body?.user ?? null);
+            })
             .catch(() => {});
         } else if (response.status === 401 || response.status === 403) {
           window.location.replace(`/login?next=${encodeURIComponent(pathRef.current)}`);
@@ -128,7 +141,8 @@ function useProjects(enabled) {
 function useOpenCritical() {
   const st = useStore();
   let n = 0;
-  for (const i of st.incidents.values()) if (OPEN.has(i.status) && i.severity === "critical") n += 1;
+  for (const i of st.incidents.values())
+    if (OPEN.has(i.status) && i.severity === "critical") n += 1;
   return { count: n, known: st.bootstrapped };
 }
 
@@ -215,6 +229,7 @@ function AppShell({ children, path }) {
             {ready ? <TopbarStatus /> : null}
           </header>
           {ready ? <StatusBanner /> : null}
+          {session === "authenticated" ? <VerifyEmailBanner /> : null}
           <main
             id="main"
             tabIndex={-1}
@@ -231,7 +246,11 @@ function AppShell({ children, path }) {
         </div>
       </div>
       {ready ? (
-        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} returnFocusRef={triggerRef} />
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          returnFocusRef={triggerRef}
+        />
       ) : null}
       <Toaster position="bottom-right" richColors />
     </TooltipProvider>
@@ -264,7 +283,9 @@ function WorkspaceSwitcher({ projects, projectId, rail = false, onNavigate }) {
     focusRing,
     rail && "md:justify-center md:px-0 lg:justify-start lg:px-2",
   );
-  const label = <span className={cn("min-w-0 flex-1 truncate", rail && "md:hidden lg:inline")}>{name}</span>;
+  const label = (
+    <span className={cn("min-w-0 flex-1 truncate", rail && "md:hidden lg:inline")}>{name}</span>
+  );
 
   return (
     <div className="flex h-14 flex-none items-center px-2">
@@ -321,7 +342,12 @@ function WorkspaceSwitcher({ projects, projectId, rail = false, onNavigate }) {
 function NavList({ path, ready, rail = false, onNavigate }) {
   return NAV.map((g) => (
     <div key={g.group} className="mt-4 first:mt-1">
-      <div className={cn("px-2 pb-1 text-xs font-medium text-faint", rail && "md:sr-only lg:not-sr-only")}>
+      <div
+        className={cn(
+          "px-2 pb-1 text-xs font-medium text-faint",
+          rail && "md:sr-only lg:not-sr-only",
+        )}
+      >
         {g.group}
       </div>
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
@@ -349,9 +375,14 @@ function NavList({ path, ready, rail = false, onNavigate }) {
             <>
               <Icon
                 aria-hidden
-                className={cn("size-4 shrink-0", current ? "text-primary" : "text-muted-foreground")}
+                className={cn(
+                  "size-4 shrink-0",
+                  current ? "text-primary" : "text-muted-foreground",
+                )}
               />
-              <span className={cn("min-w-0 flex-1 truncate", rail && "md:sr-only lg:not-sr-only")}>{label}</span>
+              <span className={cn("min-w-0 flex-1 truncate", rail && "md:sr-only lg:not-sr-only")}>
+                {label}
+              </span>
               {count}
             </>
           );
@@ -403,7 +434,12 @@ function CriticalCount({ rail }) {
 function DecoyCount() {
   const st = useStore();
   const online = st.decoys.filter((d) => d.status === "online").length;
-  const tone = st.decoys.length === 0 ? "bg-muted-foreground" : online === st.decoys.length ? "bg-ok" : "bg-warn";
+  const tone =
+    st.decoys.length === 0
+      ? "bg-muted-foreground"
+      : online === st.decoys.length
+        ? "bg-ok"
+        : "bg-warn";
   return (
     <span className="inline-flex items-center gap-2 tabular-nums">
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", tone)} />
@@ -416,7 +452,9 @@ function initialsOf(user) {
   const name = (user?.name || "").trim();
   if (name) {
     const parts = name.split(/\s+/);
-    return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts.at(-1)?.[0] ?? "") : "")).toUpperCase();
+    return (
+      (parts[0]?.[0] ?? "") + (parts.length > 1 ? (parts.at(-1)?.[0] ?? "") : "")
+    ).toUpperCase();
   }
   const handle = user?.username || user?.email || "";
   return handle.slice(0, 2).toUpperCase() || "?";
@@ -468,7 +506,12 @@ function UserMenu({ user, mock, rail }) {
           className={cn("size-4 shrink-0 text-muted-foreground", rail && "md:hidden lg:inline")}
         />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side={rail ? "right" : "top"} sideOffset={6} className="w-60">
+      <DropdownMenuContent
+        align="start"
+        side={rail ? "right" : "top"}
+        sideOffset={6}
+        className="w-60"
+      >
         <DropdownMenuGroup>
           <DropdownMenuLabel className="flex flex-col gap-0.5 py-1.5">
             <span className="truncate text-sm font-medium text-foreground">{name}</span>
@@ -500,7 +543,10 @@ function Crumbs({ path, ready }) {
     <nav aria-label="Breadcrumb" className="crumbs min-w-0 truncate text-sm text-muted-foreground">
       {leafId ? (
         <>
-          <Link href={cur?.href || "/dashboard"} className={cn("rounded-sm hover:text-foreground", focusRing)}>
+          <Link
+            href={cur?.href || "/dashboard"}
+            className={cn("rounded-sm hover:text-foreground", focusRing)}
+          >
             {cur?.label ?? "LXS"}
           </Link>
           <ChevronRight aria-hidden className="mx-1 inline size-3.5 align-[-2px]" />
@@ -560,10 +606,18 @@ function TopbarStatus() {
 
   return (
     <div className="flex min-w-0 items-center gap-1 sm:gap-2">
-      <span aria-live="polite" className="hidden items-center gap-2 px-2 text-sm text-foreground sm:inline-flex">
+      <span
+        aria-live="polite"
+        className="hidden items-center gap-2 px-2 text-sm text-foreground sm:inline-flex"
+      >
         <span aria-hidden className="relative flex size-2 shrink-0">
           {live ? (
-            <span className={cn("absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping", dot)} />
+            <span
+              className={cn(
+                "absolute inset-0 rounded-full opacity-60 motion-safe:animate-ping",
+                dot,
+              )}
+            />
           ) : null}
           <span className={cn("relative size-2 rounded-full", dot)} />
         </span>
@@ -637,7 +691,10 @@ function StatusBanner() {
           : "border-destructive/40 bg-destructive/10 dark:bg-destructive/15",
       )}
     >
-      <Icon aria-hidden className={cn("mt-0.5 size-4 shrink-0", demo ? "text-warn" : "text-destructive")} />
+      <Icon
+        aria-hidden
+        className={cn("mt-0.5 size-4 shrink-0", demo ? "text-warn" : "text-destructive")}
+      />
       {demo ? (
         <span>
           <strong className="font-semibold">Mock data: nothing on this screen is real.</strong> The

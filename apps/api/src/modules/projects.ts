@@ -1,17 +1,31 @@
 import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { Overview } from '@lxs/schema';
-import { and, asc, desc, sql as dsql, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, sql as dsql, eq, inArray, isNull } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { db, sql as rawSql } from '../db/client.js';
-import { apiKeys, attackers, incidents, memberships, projects } from '../db/schema.js';
+import { type DbOrTx, db, sql as rawSql } from '../db/client.js';
+import {
+  apiKeys,
+  attackers,
+  incidents,
+  memberships,
+  organizations,
+  projects,
+} from '../db/schema.js';
+import { env } from '../env.js';
 import { audit } from '../lib/audit.js';
 import { generateIngestKey } from '../lib/crypto.js';
-import { conflict, forbidden, notFound } from '../lib/errors.js';
+import { conflict, forbidden, HttpError, notFound } from '../lib/errors.js';
 import { parse } from '../lib/parse.js';
 import { type IncidentRow, incidentSummaryCols, iso, toIncidentSummary } from '../lib/serialize.js';
-import { isUuid, projectAccess, requireSession, userOrgs } from '../plugins/auth-session.js';
+import {
+  isUuid,
+  projectAccess,
+  requireSession,
+  requireVerified,
+  userOrgs,
+} from '../plugins/auth-session.js';
 import { evictKeyCache } from '../plugins/bearer-key.js';
 import { llmConfig } from '../worker/narrator.js';
 import { slugify } from './auth.js';
@@ -109,6 +123,26 @@ const projectJson = (p: ProjectRow) => ({
   archived_at: iso(p.archivedAt),
 });
 
+export const E_LIMIT_REACHED = 'E_LIMIT_REACHED';
+
+/** 403 when an org is at its cap for `kind` (H1 abuse limits; env-configurable). */
+export function assertUnderCap(kind: 'projects' | 'keys', current: number, limit: number): void {
+  if (current < limit) return;
+  const what = kind === 'projects' ? 'projects' : 'active ingest keys';
+  throw new HttpError(
+    403,
+    E_LIMIT_REACHED,
+    `This organization has reached its limit of ${limit} ${what}. ${
+      kind === 'keys' ? 'Revoke an unused key' : 'Archive a project'
+    } or contact support to raise it.`,
+    { kind, limit },
+  );
+}
+
+/** Serialize cap checks per org for the rest of the transaction. */
+const lockOrg = (tx: DbOrTx, orgId: string) =>
+  tx.execute(dsql`SELECT pg_advisory_xact_lock(hashtext(${`org-cap:${orgId}`}))`);
+
 export async function projectRoutes(app: FastifyInstance): Promise<void> {
   const auth = { preHandler: requireSession };
 
@@ -117,7 +151,8 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       .select({ p: projects })
       .from(projects)
       .innerJoin(memberships, eq(memberships.orgId, projects.orgId))
-      .where(eq(memberships.userId, req.user!.id))
+      .innerJoin(organizations, eq(organizations.id, projects.orgId))
+      .where(and(eq(memberships.userId, req.user!.id), isNull(organizations.disabledAt)))
       .orderBy(asc(projects.createdAt));
     return { items: rows.map((r) => projectJson(r.p)) };
   });
@@ -134,16 +169,24 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       .where(and(eq(projects.orgId, org.id), eq(projects.slug, slug)))
       .limit(1);
     if (dupe) throw conflict('A project with this slug already exists');
-    const [p] = await db
-      .insert(projects)
-      .values({
-        orgId: org.id,
-        name: body.name,
-        slug,
-        environment: body.environment,
-        passwordSalt: randomBytes(16),
-      })
-      .returning();
+    const p = await db.transaction(async (tx) => {
+      await lockOrg(tx, org.id);
+      const [{ n }] = (await tx.execute(dsql`
+        SELECT count(*)::int AS n FROM projects WHERE org_id = ${org.id}::uuid AND archived_at IS NULL
+      `)) as unknown as [{ n: number }];
+      assertUnderCap('projects', n, env.MAX_PROJECTS_PER_ORG);
+      const [row] = await tx
+        .insert(projects)
+        .values({
+          orgId: org.id,
+          name: body.name,
+          slug,
+          environment: body.environment,
+          passwordSalt: randomBytes(16),
+        })
+        .returning();
+      return row;
+    });
     await audit(db, {
       orgId: org.id,
       projectId: p!.id,
@@ -223,18 +266,28 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       (req.params as { pid: string }).pid,
       'owner',
     );
+    requireVerified(user);
     const body = parse(CreateKey, req.body);
     const k = generateIngestKey();
-    const [row] = await db
-      .insert(apiKeys)
-      .values({
-        projectId: project.id,
-        name: body.name,
-        prefix: k.prefix,
-        keyHash: k.hash,
-        createdBy: user.id,
-      })
-      .returning();
+    const row = await db.transaction(async (tx) => {
+      await lockOrg(tx, project.orgId);
+      const [{ n }] = (await tx.execute(dsql`
+        SELECT count(*)::int AS n FROM api_keys k JOIN projects p ON p.id = k.project_id
+        WHERE p.org_id = ${project.orgId}::uuid AND k.revoked_at IS NULL
+      `)) as unknown as [{ n: number }];
+      assertUnderCap('keys', n, env.MAX_KEYS_PER_ORG);
+      const [inserted] = await tx
+        .insert(apiKeys)
+        .values({
+          projectId: project.id,
+          name: body.name,
+          prefix: k.prefix,
+          keyHash: k.hash,
+          createdBy: user.id,
+        })
+        .returning();
+      return inserted;
+    });
     await audit(db, {
       orgId: project.orgId,
       projectId: project.id,

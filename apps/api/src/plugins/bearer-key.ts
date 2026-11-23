@@ -2,9 +2,9 @@ import { sql as dsql, eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { db } from '../db/client.js';
-import { apiKeys, projects } from '../db/schema.js';
+import { apiKeys, organizations, projects } from '../db/schema.js';
 import { sha256 } from '../lib/crypto.js';
-import { forbidden, unauthorized } from '../lib/errors.js';
+import { forbidden, HttpError, unauthorized } from '../lib/errors.js';
 
 export interface IngestAuth {
   keyId: string;
@@ -32,7 +32,7 @@ const cache = new Map<string, CacheEntry>(); // insertion-ordered => simple LRU
 
 /**
  * Ingest-key auth: `Authorization: Bearer ds_<prefix>_<secret>` → sha256 → api_keys.key_hash.
- * Result cached 60 s (revocation takes effect within a minute); last_used_at touched at most once a minute.
+ * Result cached 60 s (revocation and the org kill switch take effect within a minute); last_used_at touched at most once a minute.
  */
 export async function authenticateKey(
   header: string | undefined,
@@ -61,15 +61,20 @@ export async function authenticateKey(
         revokedAt: apiKeys.revokedAt,
         orgId: projects.orgId,
         archivedAt: projects.archivedAt,
+        orgDisabledAt: organizations.disabledAt,
       })
       .from(apiKeys)
       .innerJoin(projects, eq(projects.id, apiKeys.projectId))
+      .innerJoin(organizations, eq(organizations.id, projects.orgId))
       .where(eq(apiKeys.keyHash, hash))
       .limit(1);
     const row = rows[0];
     if (!row) throw unauthorized('Unknown API key', 'invalid_key');
     if (row.revokedAt) throw forbidden('API key has been revoked', 'key_revoked');
     if (row.archivedAt) throw forbidden('Project is archived', 'project_archived');
+    // Admin kill switch: a disabled org's keys stop working (within the cache TTL).
+    if (row.orgDisabledAt)
+      throw new HttpError(403, 'E_ORG_DISABLED', 'This organization has been disabled');
     entry = {
       auth: {
         keyId: row.id,

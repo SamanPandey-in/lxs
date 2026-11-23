@@ -9,7 +9,12 @@ export const QUEUES = {
   retentionPurge: 'retention-purge',
   narrateIncident: 'narrate-incident',
   assessIncident: 'assess-incident',
+  notifyIncident: 'notify-incident',
 } as const;
+
+export interface NotifyIncidentJob {
+  incidentId: string;
+}
 
 export interface NarrateIncidentJob {
   incidentId: string;
@@ -162,5 +167,48 @@ export async function enqueueNarrate(incidentId: string): Promise<void> {
         void fn(incidentId).catch(() => {});
       }, seconds * 1000),
     );
+  }
+}
+
+type Notifier = (incidentId: string) => Promise<unknown>;
+let inProcessNotifier: Notifier | null = null;
+export const setInProcessNotifier = (fn: Notifier): void => {
+  inProcessNotifier = fn;
+};
+
+/** Short settle so a burst that opens several incidents for one attacker pages once. */
+export const NOTIFY_SETTLE_SECONDS = 3;
+
+/**
+ * Ask for an incident's alert channels to be evaluated. The job is idempotent (dedupe lives
+ * in notification_deliveries), so enqueueing on every create or severity change is safe.
+ * Retries back off exponentially: 5 s, 10 s, 20 s, 40 s.
+ */
+export async function enqueueNotifyIncident(
+  incidentId: string,
+  delaySeconds = NOTIFY_SETTLE_SECONDS,
+): Promise<void> {
+  const b = getBoss();
+  if (b) {
+    try {
+      await b.send(QUEUES.notifyIncident, { incidentId } satisfies NotifyIncidentJob, {
+        retryLimit: 4,
+        retryDelay: 5,
+        retryBackoff: true,
+        startAfter: Math.max(0, Math.ceil(delaySeconds)),
+        expireInSeconds: 120,
+      });
+      return;
+    } catch {
+      /* fall through to in-process */
+    }
+  }
+  if (inProcessNotifier) {
+    const fn = inProcessNotifier;
+    const run = (attempt: number) =>
+      void fn(incidentId).catch(() => {
+        if (attempt < 4) setTimeout(() => run(attempt + 1), 5000 * 2 ** attempt).unref?.();
+      });
+    setTimeout(() => run(0), Math.max(0, delaySeconds) * 1000).unref?.();
   }
 }

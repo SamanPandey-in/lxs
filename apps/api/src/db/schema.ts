@@ -32,6 +32,9 @@ export const users = pgTable(
     passwordHash: text('password_hash').notNull(),
     sessionVersion: integer('session_version').notNull().default(0),
     name: text('name').notNull().default(''),
+    // Null until the address is confirmed. Unverified users can sign in and look
+    // around, but cannot create ingest keys or invite members.
+    emailVerifiedAt: ts('email_verified_at'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -47,6 +50,9 @@ export const organizations = pgTable(
     name: text('name').notNull(),
     slug: text('slug').notNull(),
     createdAt: createdAt(),
+    // Admin kill switch (src/db/org-kill-switch.ts): blocks login and ingest for the org.
+    disabledAt: ts('disabled_at'),
+    disabledReason: text('disabled_reason'),
   },
   (t) => [uniqueIndex('organizations_slug_uq').on(t.slug)],
 );
@@ -62,6 +68,53 @@ export const memberships = pgTable(
     createdAt: createdAt(),
   },
   (t) => [primaryKey({ columns: [t.orgId, t.userId] })],
+);
+
+/**
+ * Emailed single-use tokens for verification and password reset. The token is
+ * `<id>.<secret>`; only sha256(secret) is stored (see lib/tokens.ts).
+ */
+export const authTokens = pgTable(
+  'auth_tokens',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    purpose: text('purpose').notNull(), // verify_email | reset_password
+    tokenHash: bytea('token_hash').notNull(),
+    email: text('email').notNull(), // the address the link was sent to
+    expiresAt: ts('expires_at').notNull(),
+    usedAt: ts('used_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [index('auth_tokens_user_purpose_idx').on(t.userId, t.purpose, t.createdAt)],
+);
+
+/** Pending and historical invitations to join an organization. */
+export const orgInvites = pgTable(
+  'org_invites',
+  {
+    id: uuid('id').primaryKey(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    role: text('role').notNull(), // owner | analyst | viewer
+    tokenHash: bytea('token_hash').notNull(),
+    invitedBy: text('invited_by'),
+    expiresAt: ts('expires_at').notNull(),
+    acceptedAt: ts('accepted_at'),
+    acceptedBy: text('accepted_by'),
+    revokedAt: ts('revoked_at'),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index('org_invites_org_idx').on(t.orgId),
+    uniqueIndex('org_invites_pending_uq')
+      .on(t.orgId, t.email)
+      .where(sql`${t.acceptedAt} IS NULL AND ${t.revokedAt} IS NULL`),
+  ],
 );
 
 export const projects = pgTable(
@@ -403,10 +456,42 @@ export const notificationChannels = pgTable(
     minSeverity: text('min_severity').notNull().default('high'),
     labels: text('labels').array().notNull().default(sql`ARRAY['targeted']::text[]`),
     enabled: boolean('enabled').notNull().default(true),
-    lastStatus: text('last_status'),
+    /** HMAC signing secret for generic webhooks (encrypted like the URL). Null for Slack. */
+    secretEncrypted: bytea('secret_encrypted'),
+    lastStatus: text('last_status'), // null (never sent) | ok | failed
+    lastError: text('last_error'),
+    lastDeliveredAt: ts('last_delivered_at'),
     createdAt: createdAt(),
   },
   (t) => [index('notification_channels_project_idx').on(t.projectId)],
+);
+
+/** One row per message attempt (incident alert or test). Drives dedupe, cooldown and debugging. */
+export const notificationDeliveries = pgTable(
+  'notification_deliveries',
+  {
+    id: pk(),
+    channelId: uuid('channel_id')
+      .notNull()
+      .references(() => notificationChannels.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'cascade' }),
+    attackerId: uuid('attacker_id'),
+    kind: text('kind').notNull().default('incident'), // incident | test
+    severity: text('severity').notNull(),
+    status: text('status').notNull().default('sending'), // sending | ok | failed
+    httpStatus: integer('http_status'),
+    error: text('error'),
+    attempts: integer('attempts').notNull().default(1),
+    createdAt: createdAt(),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('notification_deliveries_step_uq').on(t.channelId, t.incidentId, t.severity),
+    index('notification_deliveries_attacker_idx').on(t.channelId, t.attackerId, t.createdAt.desc()),
+  ],
 );
 
 export const containmentReports = pgTable(

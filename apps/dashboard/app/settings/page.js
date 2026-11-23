@@ -1,6 +1,8 @@
 "use client";
-import { Bell, Check, Copy, KeyRound, Plus, Send, Trash2 } from "lucide-react";
+import { Check, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import MembersPanel from "@/components/settings/members-panel";
+import { NotificationsPanel } from "@/components/settings/notifications-panel";
 import {
   Badge,
   Button,
@@ -37,6 +39,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { RelativeTime } from "@/components/workspace";
 import { api, PROJECT, setActiveProject } from "@/lib/core";
 import { useAsync, useCopy } from "@/lib/hooks";
+import { useMe } from "@/lib/identity";
 import { toast } from "@/lib/toast";
 
 // Non-empty, trimmed allowlist lines.
@@ -69,7 +72,6 @@ const CAPTURE_OPTIONS = [
 const dateFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const dateTimeFmt = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const fmtDate = (iso, f = dateFmt) => (iso ? f.format(new Date(iso)) : "—");
-
 
 /** Template D section: title + description on top, content below, full width. */
 function Section({ title, description, action, children }) {
@@ -121,8 +123,9 @@ function KeyPrefix({ prefix }) {
 
 export default function SettingsPage() {
   const { data, error, loading, reload } = useAsync(() => api.settings(PROJECT), []);
+  const keyBlocked =
+    useMe()?.email_verified === false ? "Confirm your email address to create ingest keys." : null;
   const [keys, setKeys] = useState([]);
-  const [channels, setChannels] = useState([]);
   const [allow, setAllow] = useState("");
   const [retention, setRetention] = useState(30);
   const [ai, setAi] = useState(true);
@@ -134,15 +137,12 @@ export default function SettingsPage() {
   const [projectOpen, setProjectOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [projectBusy, setProjectBusy] = useState(false);
-  const [hook, setHook] = useState(null);
-  const [hookTouched, setHookTouched] = useState(false);
   // Snapshot of the last-saved values, so "Save changes" knows what (if anything) changed.
   const [baseline, setBaseline] = useState(null);
 
   useEffect(() => {
     if (!data) return;
     setKeys(data.keys || []);
-    setChannels(data.channels || []);
     setAllow((data.allowlist || []).join("\n"));
     setRetention(data.retention_days ?? 30);
     setAi(data.ai_narration ?? true);
@@ -241,29 +241,6 @@ export default function SettingsPage() {
     setBaseline({ allow, retention: retentionNum, ai, capture });
   };
 
-  const hookValid = /^https?:\/\/\S+$/.test(hook || "");
-  const closeHook = () => {
-    setHook(null);
-    setHookTouched(false);
-  };
-  const addHook = () => {
-    setHookTouched(true);
-    if (!hookValid) return;
-    setChannels((c) => [
-      ...c,
-      {
-        id: `ch_${Date.now()}`,
-        type: "webhook",
-        label: "Custom webhook",
-        target: hook,
-        min_severity: "high",
-        status: "ok",
-      },
-    ]);
-    closeHook();
-    toast("Webhook added");
-  };
-
   return shell(
     <>
       <PageHeader
@@ -280,7 +257,13 @@ export default function SettingsPage() {
         title="Ingest keys"
         description="Sensors and the SDK use these to send events. The full key is shown once, when you create it."
         action={
-          <Button variant="outline" size="sm" onClick={createKey} loading={keyBusy}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={createKey}
+            loading={keyBusy}
+            disabledReason={keyBlocked}
+          >
             {keyBusy ? null : <Plus aria-hidden />} Create key
           </Button>
         }
@@ -291,7 +274,13 @@ export default function SettingsPage() {
               icon={KeyRound}
               title="No ingest keys"
               action={
-                <Button variant="outline" size="sm" onClick={createKey} loading={keyBusy}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={createKey}
+                  loading={keyBusy}
+                  disabledReason={keyBlocked}
+                >
                   Create key
                 </Button>
               }
@@ -363,60 +352,7 @@ export default function SettingsPage() {
         </Card>
       </Section>
 
-      <Section
-        title="Notifications"
-        description="Webhooks fire for High and Critical targeted incidents only."
-        action={
-          <Button variant="outline" size="sm" onClick={() => setHook("")}>
-            <Plus aria-hidden /> Add webhook
-          </Button>
-        }
-      >
-        <Card flush>
-          {channels.length === 0 ? (
-            <EmptyState icon={Bell} title="No channels">
-              Add a Slack or generic webhook to be told about critical incidents.
-            </EmptyState>
-          ) : (
-            <ul className="m-0 list-none p-0">
-              {channels.map((c) => (
-                <li
-                  key={c.id}
-                  className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-5 py-3 last:border-b-0"
-                >
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="inline-flex min-w-0 items-center gap-2">
-                      <span className="truncate font-medium text-foreground">{c.label}</span>
-                      <Badge variant="tag" tone="info">
-                        {c.type}
-                      </Badge>
-                    </span>
-                    <span
-                      className="truncate font-mono text-sm text-muted-foreground"
-                      title={c.target}
-                      translate="no"
-                    >
-                      {c.target || "—"}
-                    </span>
-                  </div>
-                  <Badge variant="tag" tone="neutral">
-                    {c.min_severity === "critical" ? "Critical only" : "High and above"}
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() =>
-                      toast(`Test sent to ${c.label}`, "success", "HTTP 200 in 142 ms")
-                    }
-                  >
-                    <Send aria-hidden /> Send test
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-      </Section>
+      <NotificationsPanel />
 
       <Section
         title="Detection policy"
@@ -522,6 +458,8 @@ export default function SettingsPage() {
         </Card>
       </Section>
 
+      <MembersPanel />
+
       <Dialog
         open={!!newKey}
         onOpenChange={(open) => {
@@ -554,9 +492,7 @@ export default function SettingsPage() {
         open={!!revoking}
         onClose={() => setRevoking(null)}
         title={revoking ? `Revoke ${revoking.name}?` : "Revoke key?"}
-        actions={[
-          { label: "Revoke key", tone: "danger", busy: revokeBusy, onClick: revokeKey },
-        ]}
+        actions={[{ label: "Revoke key", tone: "danger", busy: revokeBusy, onClick: revokeKey }]}
       >
         <p className="m-0">
           Sensors and SDKs using{" "}
@@ -589,36 +525,6 @@ export default function SettingsPage() {
             maxLength={128}
             onChange={(event) => setProjectName(event.target.value)}
             placeholder="Production app…"
-          />
-        </Field>
-      </Modal>
-
-      <Modal
-        open={hook !== null}
-        onClose={closeHook}
-        title="Add a webhook"
-        actions={[{ label: "Add webhook", disabled: hookTouched && !hookValid, onClick: addHook }]}
-      >
-        <Field
-          id="hook"
-          label="Endpoint URL"
-          hint="Private and loopback addresses are refused (SSRF guard)."
-          error={
-            hookTouched && !hookValid ? "Enter a full URL that starts with https:// or http://." : null
-          }
-        >
-          <Input
-            id="hook"
-            name="webhook_url"
-            type="url"
-            inputMode="url"
-            autoComplete="off"
-            spellCheck={false}
-            value={hook || ""}
-            onChange={(e) => setHook(e.target.value)}
-            onBlur={() => setHookTouched(Boolean(hook))}
-            aria-invalid={(hookTouched && !hookValid) || undefined}
-            placeholder="https://hooks.example.com/lxs"
           />
         </Field>
       </Modal>

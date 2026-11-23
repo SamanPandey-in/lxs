@@ -15,7 +15,8 @@
       "!**/Genesis_Prototype-sam-fix",
       "!**/attacker-demo/**/node_modules",
       "!**/.lxs",
-      "!**/*.css"
+      "!**/*.css",
+      "!**/db/migrations/meta"
     ]
   },
   "formatter": {

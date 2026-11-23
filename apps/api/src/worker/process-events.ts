@@ -2,7 +2,12 @@ import type { DecoyEvent, Detection } from '@lxs/schema';
 import { and, asc, sql as dsql, eq, inArray, isNull, notInArray } from 'drizzle-orm';
 import { db, type Tx } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
-import { enqueueAssessIncident, enqueueNarrate, type ProcessEventsJob } from '../jobs/queue.js';
+import {
+  enqueueAssessIncident,
+  enqueueNarrate,
+  enqueueNotifyIncident,
+  type ProcessEventsJob,
+} from '../jobs/queue.js';
 import { sha256hex } from '../lib/crypto.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
@@ -100,6 +105,7 @@ export async function processEvents(
       // Queue every new incident even when this API process lacks provider config.
       // In split API/worker deployments the worker may own the LLM credentials.
       if (incidentId) await enqueueNarrate(incidentId);
+      if (incidentId) await enqueueNotifyIncident(incidentId);
       if (incidentId && assess && llmConfig) await enqueueAssessIncident(incidentId);
     } catch (err) {
       firstError ??= err;

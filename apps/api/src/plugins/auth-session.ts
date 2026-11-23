@@ -1,21 +1,56 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { db } from '../db/client.js';
 import { memberships, organizations, projects, users } from '../db/schema.js';
 import { env } from '../env.js';
 import { signToken, verifyToken } from '../lib/crypto.js';
-import { forbidden, notFound, unauthorized } from '../lib/errors.js';
+import { forbidden, HttpError, notFound, unauthorized } from '../lib/errors.js';
 
 export type Role = 'owner' | 'analyst' | 'viewer';
+export const ROLES: readonly Role[] = ['owner', 'analyst', 'viewer'];
 const RANK: Record<Role, number> = { viewer: 1, analyst: 2, owner: 3 };
+export const roleAtLeast = (role: Role, min: Role): boolean => RANK[role] >= RANK[min];
+
+/**
+ * Role matrix, enforced through `projectAccess`/`orgAccess`:
+ *   viewer  - read only.
+ *   analyst - read, plus incident work: notes, status, block/unblock.
+ *   owner   - everything, including keys, project settings, members and channels.
+ * Routes pass the minimum role they need; on top of that, any non-read request
+ * needs at least analyst, so a route that forgets its `min` cannot hand a viewer
+ * write access.
+ */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+export function effectiveMinRole(method: string, min: Role): Role {
+  if (!SAFE_METHODS.has(method.toUpperCase()) && RANK[min] < RANK.analyst) return 'analyst';
+  return min;
+}
 
 export interface SessionUser {
   id: string;
   email: string;
   username: string;
   name: string;
+  emailVerified: boolean;
 }
+
+export const E_EMAIL_UNVERIFIED = 'E_EMAIL_UNVERIFIED';
+export const E_ORG_DISABLED = 'E_ORG_DISABLED';
+
+/** 403 unless the session user has confirmed their email address. */
+export function requireVerified(user: SessionUser | undefined): void {
+  if (!user) throw unauthorized();
+  if (!user.emailVerified)
+    throw new HttpError(
+      403,
+      E_EMAIL_UNVERIFIED,
+      'Verify your email address first. Check your inbox or resend the link from the banner.',
+    );
+}
+
+export const orgDisabled = () =>
+  new HttpError(403, E_ORG_DISABLED, 'This organization has been disabled. Contact support.');
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -61,12 +96,19 @@ async function loadUser(req: FastifyRequest): Promise<SessionUser | null> {
           username: users.username,
           name: users.name,
           sessionVersion: users.sessionVersion,
+          emailVerifiedAt: users.emailVerifiedAt,
         })
         .from(users)
         .where(eq(users.id, tok.uid))
         .limit(1);
       if (u && u.sessionVersion === tok.ver) {
-        return { id: u.id, email: u.email, username: u.username, name: u.name };
+        return {
+          id: u.id,
+          email: u.email,
+          username: u.username,
+          name: u.name,
+          emailVerified: u.emailVerifiedAt != null,
+        };
       }
     }
   }
@@ -77,11 +119,25 @@ async function loadUser(req: FastifyRequest): Promise<SessionUser | null> {
   ) {
     // Dev convenience: anonymous requests act as the oldest user.
     const [u] = await db
-      .select({ id: users.id, email: users.email, username: users.username, name: users.name })
+      .select({
+        id: users.id,
+        email: users.email,
+        username: users.username,
+        name: users.name,
+        emailVerifiedAt: users.emailVerifiedAt,
+      })
       .from(users)
       .orderBy(asc(users.createdAt))
       .limit(1);
-    return u ?? null;
+    return u
+      ? {
+          id: u.id,
+          email: u.email,
+          username: u.username,
+          name: u.name,
+          emailVerified: u.emailVerifiedAt != null,
+        }
+      : null;
   }
   return null;
 }
@@ -98,12 +154,41 @@ export async function requireSession(req: FastifyRequest, _reply: FastifyReply):
 }
 
 export async function roleInOrg(userId: string, orgId: string): Promise<Role | null> {
+  return (await membershipInOrg(userId, orgId))?.role ?? null;
+}
+
+/** The user's role in an org plus whether the org is disabled; null for non-members. */
+export async function membershipInOrg(
+  userId: string,
+  orgId: string,
+): Promise<{ role: Role; disabled: boolean } | null> {
   const [m] = await db
-    .select({ role: memberships.role })
+    .select({ role: memberships.role, disabledAt: organizations.disabledAt })
     .from(memberships)
+    .innerJoin(organizations, eq(organizations.id, memberships.orgId))
     .where(and(eq(memberships.orgId, orgId), eq(memberships.userId, userId)))
     .limit(1);
-  return (m?.role as Role | undefined) ?? null;
+  if (!m) return null;
+  return { role: m.role as Role, disabled: m.disabledAt != null };
+}
+
+/**
+ * Resolve an org the session user belongs to, with at least `min` role. Non-members
+ * get 404 (the org's existence is not confirmed); disabled orgs get 403.
+ */
+export async function orgAccess(
+  req: FastifyRequest,
+  orgId: string,
+  min: Role = 'viewer',
+): Promise<{ orgId: string; role: Role; user: SessionUser }> {
+  if (!req.user) throw unauthorized();
+  if (!isUuid(orgId)) throw notFound('Organization');
+  const m = await membershipInOrg(req.user.id, orgId);
+  if (!m) throw notFound('Organization');
+  if (m.disabled) throw orgDisabled();
+  const need = effectiveMinRole(req.method, min);
+  if (!roleAtLeast(m.role, need)) throw forbidden(`Requires ${need} role`, 'insufficient_role');
+  return { orgId, role: m.role, user: req.user };
 }
 
 export interface ProjectAccess {
@@ -125,10 +210,12 @@ export async function projectAccess(
   if (!isUuid(projectId)) throw notFound('Project');
   const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
   if (!p) throw notFound('Project');
-  const role = await roleInOrg(req.user.id, p.orgId);
-  if (!role) throw notFound('Project');
-  if (RANK[role] < RANK[min]) throw forbidden(`Requires ${min} role`, 'insufficient_role');
-  return { project: p, role, user: req.user };
+  const m = await membershipInOrg(req.user.id, p.orgId);
+  if (!m) throw notFound('Project');
+  if (m.disabled) throw orgDisabled();
+  const need = effectiveMinRole(req.method, min);
+  if (!roleAtLeast(m.role, need)) throw forbidden(`Requires ${need} role`, 'insufficient_role');
+  return { project: p, role: m.role, user: req.user };
 }
 
 export async function userOrgs(userId: string) {
@@ -141,7 +228,7 @@ export async function userOrgs(userId: string) {
     })
     .from(memberships)
     .innerJoin(organizations, eq(organizations.id, memberships.orgId))
-    .where(eq(memberships.userId, userId));
+    .where(and(eq(memberships.userId, userId), isNull(organizations.disabledAt)));
 }
 
 export default fp(async function authSession(app: FastifyInstance) {

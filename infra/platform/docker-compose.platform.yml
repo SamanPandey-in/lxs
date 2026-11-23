@@ -42,6 +42,9 @@ services:
       PORT: "8080"
       DATABASE_URL: postgres://${POSTGRES_USER:-lxs}:${POSTGRES_PASSWORD:-lxs}@postgres:5432/${POSTGRES_DB:-lxs}
       SESSION_SECRET: ${SESSION_SECRET:-dev-only-session-secret-change-me}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-dev-only-encryption-key-change-me}
+      DASHBOARD_URL: ${DASHBOARD_URL:-http://localhost:3000}
+      NOTIFY_ALLOW_PRIVATE: ${NOTIFY_ALLOW_PRIVATE:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}

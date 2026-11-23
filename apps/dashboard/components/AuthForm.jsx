@@ -3,13 +3,17 @@ import { ArrowLeft, CircleAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { Captcha, useCaptchaConfig } from "@/components/captcha";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { loadConfig } from "@/lib/config";
 import { coreUrl, setActiveProject } from "@/lib/core";
+import { safeNext } from "@/lib/identity";
 
-const focusRing =
+export const AUTH_FOOTER = "Email links are single-use and expire quickly.";
+
+export const focusRing =
   "rounded-sm focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 /**
@@ -58,14 +62,17 @@ function messageFor(el, signup) {
   }
 }
 
-/** Label above, 40 px input, error (or hint) right under it. */
-function AuthField({ id, label, error, hint, onBlur, ...input }) {
+/** Label above (optional `aside` link on the right), 40 px input, error (or hint) under it. */
+export function AuthField({ id, label, error, hint, onBlur, aside, ...input }) {
   const msgId = `${id}-msg`;
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
-        {label}
-      </label>
+      <div className="flex items-baseline justify-between gap-2">
+        <label htmlFor={id} className="text-xs font-medium text-muted-foreground">
+          {label}
+        </label>
+        {aside}
+      </div>
       <Input
         id={id}
         className="h-10"
@@ -90,7 +97,11 @@ function AuthField({ id, label, error, hint, onBlur, ...input }) {
 function Form({ signup }) {
   const router = useRouter();
   const params = useSearchParams();
-  const [identifier, setIdentifier] = useState("");
+  // Signup-then-accept: /signup?invite=<token>&email=<address> joins the inviting org.
+  const inviteToken = signup ? params.get("invite") || "" : "";
+  const captchaConfig = useCaptchaConfig();
+  const [captchaToken, setCaptchaToken] = useState("");
+  const [identifier, setIdentifier] = useState(() => (signup && params.get("email")) || "");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -127,6 +138,10 @@ function Form({ signup }) {
       first.focus();
       return;
     }
+    if (signup && captchaConfig.provider !== "none" && !captchaToken) {
+      setFormError("Complete the bot check first.");
+      return;
+    }
     setBusy(true);
     try {
       // Runtime config first: until it loads, coreUrl() is only the build-time default.
@@ -142,7 +157,9 @@ function Form({ signup }) {
                 username: username || undefined,
                 password,
                 name,
-                project_name: projectName,
+                project_name: inviteToken ? undefined : projectName,
+                invite_token: inviteToken || undefined,
+                captcha_token: captchaToken || undefined,
               }
             : { identifier, password },
         ),
@@ -157,8 +174,7 @@ function Form({ signup }) {
               : `The server answered ${response.status}. Try again in a moment.`),
         );
       if (signup && data?.project?.id) setActiveProject(data.project.id);
-      const dest = params.get("next");
-      router.replace(dest?.startsWith("/") && !dest.startsWith("//") ? dest : "/onboarding");
+      router.replace(safeNext(params.get("next"), inviteToken ? "/dashboard" : "/onboarding"));
     } catch (err) {
       setFormError(err.message || "Couldn't reach the API. Check your connection and try again.");
       setBusy(false);
@@ -176,7 +192,7 @@ function Form({ signup }) {
           {signup ? "Log in" : "Create account"}
         </Button>
       }
-      footer="No email verification is required for this prototype."
+      footer={AUTH_FOOTER}
     >
       <div className="mx-auto flex w-full max-w-[400px] flex-col gap-4 py-10 sm:my-auto">
         <Link
@@ -195,7 +211,9 @@ function Form({ signup }) {
             </h1>
             <p className="m-0 text-sm text-muted-foreground">
               {signup
-                ? "Start monitoring your decoys and security signals."
+                ? inviteToken
+                  ? "Create an account with the invited address to join the team."
+                  : "Start monitoring your decoys and security signals."
                 : "Enter your account details to continue."}
             </p>
           </div>
@@ -213,7 +231,7 @@ function Form({ signup }) {
                 error={errors.name}
               />
             )}
-            {signup && (
+            {signup && !inviteToken && (
               <AuthField
                 id="project_name"
                 name="project_name"
@@ -275,7 +293,18 @@ function Form({ signup }) {
               onBlur={validateField}
               hint={signup ? "At least 8 characters." : undefined}
               error={errors.password}
+              aside={
+                signup ? null : (
+                  <Link
+                    href="/forgot-password"
+                    className={`text-xs font-medium text-link hover:underline ${focusRing}`}
+                  >
+                    Forgot password?
+                  </Link>
+                )
+              }
             />
+            {signup ? <Captcha config={captchaConfig} onToken={setCaptchaToken} /> : null}
             {formError ? (
               <p role="alert" className="m-0 flex items-start gap-2 text-sm text-destructive">
                 <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
@@ -303,7 +332,7 @@ function Form({ signup }) {
 
 function FormSkeleton() {
   return (
-    <PublicShell footer="No email verification is required for this prototype.">
+    <PublicShell footer={AUTH_FOOTER}>
       <div
         role="status"
         aria-live="polite"

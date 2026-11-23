@@ -24,6 +24,7 @@ async function main(): Promise<void> {
         username: USERNAME,
         name: 'Saman Pandey',
         passwordHash: await hashPassword(PASSWORD),
+        emailVerifiedAt: new Date(),
       })
       .returning();
   } else {

@@ -10,6 +10,7 @@ import { eventRoutes } from './modules/events.js';
 import { incidentRoutes } from './modules/incidents.js';
 import { ingestRoutes, registerJsonParser } from './modules/ingest.js';
 import { insightRoutes } from './modules/insights.js';
+import { memberRoutes } from './modules/members.js';
 import { notificationRoutes } from './modules/notifications.js';
 import { projectRoutes } from './modules/projects.js';
 import { responseRoutes } from './modules/response.js';
@@ -59,6 +60,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(ingestRoutes);
   await app.register(agentRoutes);
   await app.register(projectRoutes);
+  await app.register(memberRoutes);
   await app.register(eventRoutes);
   await app.register(incidentRoutes);
   await app.register(responseRoutes);
