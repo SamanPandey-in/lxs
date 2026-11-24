@@ -188,6 +188,22 @@ app.use(decoys.express());   // first
 
 `docs/getting-started.md` is the full walkthrough. Start in `mode: 'monitor'` (never blocks) and move to `'enforce'` once you trust your allowlist.
 
+### Go apps
+
+The Go SDK (`sdk/go`) reads the same `lxs.yaml` and mounts in `net/http`, chi, gin or echo. It passes
+the same conformance vectors as the Node middleware. Generate the sidecars with `npx lxs build` as
+above, then:
+
+```go
+m, err := lxsyaml.New("lxs.yaml") // github.com/SamanPandey-in/lxs/sdk/go/lxsyaml
+if err != nil {
+	log.Fatal(err)
+}
+http.ListenAndServe(":8080", m.Handler(mux)) // first, in front of your routes
+```
+
+See [`sdk/go/README.md`](sdk/go/README.md) for the adapters and `trustProxy` guidance.
+
 ---
 
 ## Development

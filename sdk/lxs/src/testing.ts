@@ -21,7 +21,9 @@ export interface FakeAgent {
   /** Signals the middleware posted. */
   signals: Signal[];
   /** Request headers each decoy request arrived with (to assert Cookie/Authorization are stripped). */
-  decoyRequests: Array<{ url: string; headers: http.IncomingHttpHeaders }>;
+  decoyRequests: Array<{ method: string; url: string; headers: http.IncomingHttpHeaders }>;
+  /** Number of full (200) policy responses served, so tests can wait for the first poll. */
+  readonly policyServed: number;
   setPolicy(
     p: Partial<Pick<FakeAgentOptions, 'blocklist' | 'watchlist' | 'allowlist' | 'honeytokens'>>,
   ): void;
@@ -55,6 +57,7 @@ export async function startFakeAgent(opts: FakeAgentOptions): Promise<FakeAgent>
     honeytokens: opts.honeytokens ?? {},
   };
   let version = 1;
+  let policyServed = 0;
   const signals: Signal[] = [];
   const decoyRequests: FakeAgent['decoyRequests'] = [];
 
@@ -66,6 +69,9 @@ export async function startFakeAgent(opts: FakeAgentOptions): Promise<FakeAgent>
         return res.end();
       }
       res.writeHead(200, { 'content-type': 'application/json', etag });
+      res.once('finish', () => {
+        policyServed++;
+      });
       return res.end(JSON.stringify({ version, ...policy }));
     }
     if (req.method === 'POST' && req.url === '/v1/signals') {
@@ -91,7 +97,7 @@ export async function startFakeAgent(opts: FakeAgentOptions): Promise<FakeAgent>
   let decoy: http.Server | null = null;
   if (opts.fakeDecoy) {
     decoy = http.createServer((req, res) => {
-      decoyRequests.push({ url: req.url ?? '', headers: req.headers });
+      decoyRequests.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers });
       req.resume();
       res.writeHead(200, { 'content-type': 'text/plain' });
       res.end('decoy');
@@ -103,6 +109,9 @@ export async function startFakeAgent(opts: FakeAgentOptions): Promise<FakeAgent>
     runDir: opts.runDir,
     signals,
     decoyRequests,
+    get policyServed() {
+      return policyServed;
+    },
     setPolicy(p) {
       Object.assign(policy, p);
       version++;

@@ -9,6 +9,7 @@ import { LXSConfigError } from '../errors.js';
 import { type HoneytokenFile, parseHoneytokenFile } from '../generate/honeytokens.js';
 import { COMPOSE_FILE, generateAll } from '../generate/index.js';
 import type { ResolvedConfig } from '../types.js';
+import { loadYamlConfig } from '../yaml-config.js';
 
 export interface BuildOptions {
   cwd: string;
@@ -25,6 +26,8 @@ const CONFIG_CANDIDATES = [
   'decoy.config.mjs',
   'decoy.config.cjs',
 ];
+/** Language-neutral config files, used when no decoy.config.* exists. */
+const YAML_CANDIDATES = ['lxs.yaml', 'lxs.yml'];
 const COMPOSE_CANDIDATES = [
   'docker-compose.yml',
   'docker-compose.yaml',
@@ -32,6 +35,17 @@ const COMPOSE_CANDIDATES = [
   'compose.yaml',
 ];
 
+export { loadYamlConfig };
+
+export function isYamlConfig(file: string): boolean {
+  return /\.ya?ml$/i.test(file);
+}
+
+/**
+ * Picks the config file: `--config` wins; otherwise decoy.config.* or lxs.yaml / lxs.yml. Two
+ * candidates of different kinds (or both lxs.yaml and lxs.yml) are ambiguous and refused, so a stale
+ * file can never silently win.
+ */
 export function findConfig(cwd: string, explicit?: string): string {
   if (explicit) {
     const p = path.resolve(cwd, explicit);
@@ -39,19 +53,27 @@ export function findConfig(cwd: string, explicit?: string): string {
       throw new LXSConfigError('E_CONFIG_NOT_FOUND', `${explicit} does not exist.`);
     return p;
   }
-  for (const c of CONFIG_CANDIDATES) {
-    const p = path.join(cwd, c);
-    if (fs.existsSync(p)) return p;
+  const ts = CONFIG_CANDIDATES.find((c) => fs.existsSync(path.join(cwd, c)));
+  const yaml = YAML_CANDIDATES.filter((c) => fs.existsSync(path.join(cwd, c)));
+  const found = [...(ts ? [ts] : []), ...yaml];
+  if (found.length > 1) {
+    throw new LXSConfigError(
+      'E_CONFIG_AMBIGUOUS',
+      `found more than one config file (${found.join(', ')}).`,
+      'Delete the one you do not use, or pick one with `--config <file>`.',
+    );
   }
+  if (found[0]) return path.join(cwd, found[0]);
   throw new LXSConfigError(
     'E_CONFIG_NOT_FOUND',
-    'no decoy.config.ts found.',
+    'no decoy.config.ts or lxs.yaml found.',
     'Run `npx lxs init` first.',
   );
 }
 
-/** Loads decoy.config.ts through jiti (no compile step for the user). Duck-typed: the config may use another copy of this package. */
+/** Loads decoy.config.ts through jiti (no compile step for the user), or lxs.yaml. Duck-typed: the config may use another copy of this package. */
 export async function loadShield(file: string): Promise<LXS> {
+  if (isYamlConfig(file)) return loadYamlConfig(fs.readFileSync(file, 'utf8'), path.basename(file));
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
     moduleCache: false,

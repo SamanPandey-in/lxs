@@ -1,0 +1,562 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "blocklist",
+  "description": "Enforcing the policy blocklist: exact addresses and CIDRs, IPv4 and IPv6, compared on canonical addresses. Blocking happens before decoy routing; the response is a generic 403.",
+  "vectors": [
+    {
+      "name": "block-exact-ipv4",
+      "description": "A blocklisted address gets 403.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-cidr-ipv4",
+      "description": "CIDR entries match their range.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.0/24"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-cidr-ipv4-outside",
+      "description": "CIDR boundaries are exact.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.0/30"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "block-ipv6-noncanonical-entry",
+      "description": "Entries are compared canonically, not as text.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["2001:DB8:0:0:0:0:0:7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "2001:db8::7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-cidr-ipv6",
+      "description": "IPv6 CIDRs.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["2001:db8::/32"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "2001:db8:1::99"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-v4-cidr-not-v6",
+      "description": "An IPv4 CIDR never matches an IPv6 client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["0.0.0.0/1", "128.0.0.0/1"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "2001:db8::7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "block-mapped-socket",
+      "description": "An IPv4-mapped peer matches an IPv4 entry.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "::ffff:203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-mapped-entry",
+      "description": "An IPv4-mapped entry matches the IPv4 client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["::ffff:203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-mapped-cidr",
+      "description": "An IPv4-mapped CIDR (prefix >= 96) is the IPv4 CIDR with 96 fewer bits.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["::ffff:203.0.113.0/120"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-invalid-entries-ignored",
+      "description": "Malformed entries are ignored, never widened (no lenient prefix parsing).",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["not-an-ip", "203.0.113.0/33", "192.0.0.0/2x", "203.0.113.7/24/1", ""],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "block-before-decoy",
+      "description": "A blocked client gets 403 on decoy paths too.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-via-trusted-xff",
+      "description": "The derived client address is what is checked.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["198.51.100.1"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "block-untrusted-xff-cannot-frame",
+      "description": "Without trusted proxies, a client cannot get another address blocked.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["198.51.100.1"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "block-spoofed-left-entry",
+      "description": "A blocklisted address the client prepends is not read.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["198.51.100.66"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-forwarded-for", "198.51.100.66, 203.0.113.7"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    }
+  ]
+}

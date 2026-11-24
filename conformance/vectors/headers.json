@@ -1,0 +1,719 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "headers",
+  "description": "What the app and the decoy see: x-ds-* is ours (client copies are always removed), real users' credentials never reach a decoy, and only a well-formed decoy session cookie is forwarded.",
+  "vectors": [
+    {
+      "name": "decoy-replaces-client-ds-headers",
+      "description": "Client-supplied x-ds-* headers are dropped; the middleware sets its own.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [
+          ["X-DS-Client-IP", "6.6.6.6"],
+          ["x-ds-decoy-id", "forged"],
+          ["x-ds-request-id", "forged"],
+          ["X-Ds-Anything", "1"]
+        ],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "x-ds-request-id": true,
+            "x-ds-anything": null
+          }
+        }
+      }
+    },
+    {
+      "name": "pass-strips-ds-headers",
+      "description": "The app never sees client-supplied x-ds-* headers; other headers are untouched.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [
+          ["x-ds-client-ip", "6.6.6.6"],
+          ["X-DS-Decoy-Id", "forged"],
+          ["x-ds-sim-ip", "6.6.6.6"],
+          ["x-request-id", "abc"]
+        ],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "app": {
+          "headers": {
+            "x-ds-client-ip": null,
+            "x-ds-decoy-id": null,
+            "x-ds-sim-ip": null,
+            "x-request-id": "abc"
+          }
+        }
+      }
+    },
+    {
+      "name": "pass-keeps-credentials",
+      "description": "Pass-through requests keep Cookie and Authorization (they are the app's).",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/me",
+        "headers": [["cookie", "sid=SECRET"], ["authorization", "Bearer REAL"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "app": {
+          "headers": {
+            "cookie": "sid=SECRET",
+            "authorization": "Bearer REAL"
+          }
+        }
+      }
+    },
+    {
+      "name": "decoy-strips-credentials",
+      "description": "Cookie, Authorization and Proxy-Authorization never reach a decoy.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin",
+        "headers": [
+          ["cookie", "sid=SECRET"],
+          ["authorization", "Bearer REAL"],
+          ["proxy-authorization", "Basic eDp5"]
+        ],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": null,
+            "authorization": null,
+            "proxy-authorization": null
+          }
+        }
+      }
+    },
+    {
+      "name": "decoy-strips-hop-by-hop",
+      "description": "Hop-by-hop request headers are not forwarded.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["keep-alive", "timeout=5"], ["te", "trailers"], ["trailer", "x-foo"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "keep-alive": null,
+            "te": null,
+            "trailer": null
+          }
+        }
+      }
+    },
+    {
+      "name": "decoy-forwards-ordinary-headers",
+      "description": "End-to-end headers reach the decoy unchanged.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["user-agent", "sqlmap/1.7"], ["accept", "*/*"], ["x-custom", "v"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "user-agent": "sqlmap/1.7",
+            "accept": "*/*",
+            "x-custom": "v"
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-forwarded",
+      "description": "A well-formed PHPSESSID (26 chars of [0-9a-v]) is the only cookie forwarded.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [["cookie", "sid=SECRET; PHPSESSID=0123456789abcdefghijklmnop; theme=dark"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": "PHPSESSID=0123456789abcdefghijklmnop"
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-bad-format",
+      "description": "A PHPSESSID outside the decoy's format is dropped.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [["cookie", "PHPSESSID=0123456789abcdefghijklmnoz"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": null
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-name-case",
+      "description": "The cookie name is case-sensitive.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [["cookie", "phpsessid=0123456789abcdefghijklmnop"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": null
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-first-valid",
+      "description": "The first well-formed PHPSESSID wins; malformed ones are skipped.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [["cookie", "PHPSESSID=../../etc; PHPSESSID=0123456789abcdefghijklmnop"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": "PHPSESSID=0123456789abcdefghijklmnop"
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-split-headers",
+      "description": "Several Cookie header lines are joined with \"; \" before parsing.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [["cookie", "a=1"], ["cookie", "PHPSESSID=0123456789abcdefghijklmnop"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": "PHPSESSID=0123456789abcdefghijklmnop"
+          }
+        }
+      }
+    },
+    {
+      "name": "cookie-decoy-session-oversized",
+      "description": "A Cookie header longer than 8192 characters is ignored entirely.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/panel",
+        "headers": [
+          [
+            "cookie",
+            "pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; PHPSESSID=0123456789abcdefghijklmnop"
+          ]
+        ],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "cookie": null
+          }
+        }
+      }
+    },
+    {
+      "name": "decoy-body-over-limit",
+      "description": "A decoy request declaring more than 65536 body bytes is refused with 413.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/admin/login",
+        "headers": [],
+        "remoteAddress": "203.0.113.7",
+        "bodyBytes": 65537
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 413
+      }
+    },
+    {
+      "name": "decoy-body-at-limit",
+      "description": "A 65536-byte body is still proxied.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/admin/login",
+        "headers": [],
+        "remoteAddress": "203.0.113.7",
+        "bodyBytes": 65536
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "method": "POST",
+          "headers": {
+            "content-length": "65536"
+          }
+        }
+      }
+    },
+    {
+      "name": "pass-large-body",
+      "description": "The body limit applies only to decoys.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/api/upload",
+        "headers": [],
+        "remoteAddress": "203.0.113.7",
+        "bodyBytes": 70000
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "app": {
+          "headers": {
+            "content-length": "70000"
+          }
+        }
+      }
+    }
+  ]
+}

@@ -83,6 +83,54 @@ t.honeytokens({ apiKey: { header: 'authorization', prefix: 'acme_live_' } });
 export default t;
 ```
 
+### Or: `lxs.yaml`
+
+If you would rather not keep the config in TypeScript (a Go or Python service, or one decoy layout
+shared by several apps), write the same content as `lxs.yaml` and delete `decoy.config.ts`:
+
+```yaml
+# yaml-language-server: $schema=./node_modules/lxs/schema/lxs.schema.json
+service: shop
+mode: enforce
+trustProxy: [loopback]
+allowlist: [10.0.0.0/8]
+
+decoys:
+  - type: web-admin
+    path: /admin
+    brand: Acme Shop
+    acceptCredentials:
+      - [admin, admin]
+    panel: customers
+  - type: web-bait
+    path: /.env
+  - type: web-bait
+    path: /backup.sql
+  - type: ssh
+    port: 22
+    persona: db-backup
+    hostname: db-backup-01
+    credentials: weak-defaults
+
+assets:
+  - pattern: /api/payments/*
+    name: Payments API
+    criticality: critical
+  - pattern: /api/*
+    name: Shop API
+
+honeytokens:
+  apiKey:
+    header: authorization
+    prefix: acme_live_
+```
+
+`npx lxs build` finds `lxs.yaml` (or `lxs.yml`) on its own when there is no `decoy.config.ts`.
+With both present it refuses to guess: pass `--config lxs.yaml` or delete one. Both formats are
+validated by the same schema and produce byte-identical output. The JSON Schema in the first line
+gives you completion and checking in editors that support it. In a Node app, mount the middleware
+with `import { loadLxsYaml } from 'lxs'` and `app.use(loadLxsYaml('lxs.yaml').express())`.
+
 `.env.lxs` holds the ingest key and is git-ignored. Paste the key from step 1
 into it.
 

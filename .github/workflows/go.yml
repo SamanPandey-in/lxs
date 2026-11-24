@@ -1,0 +1,69 @@
+name: Go SDK
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - 'sdk/go/**'
+      - 'conformance/**'
+      - '.github/workflows/go.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sdk/go/**'
+      - 'conformance/**'
+      - '.github/workflows/go.yml'
+
+jobs:
+  go:
+    name: go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: |
+            sdk/go/go.sum
+            sdk/go/gin/go.sum
+            sdk/go/echo/go.sum
+            conformance/runners/go/go.sum
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          out="$(gofmt -l sdk/go conformance/runners/go conformance/bench/go)"
+          if [ -n "$out" ]; then echo "gofmt needed:"; echo "$out"; exit 1; fi
+      - name: sdk/go vet and test
+        working-directory: sdk/go
+        run: |
+          go vet ./...
+          go test ./...
+      - name: adapters vet (gin, echo)
+        run: |
+          (cd sdk/go/gin && go vet ./...)
+          (cd sdk/go/echo && go vet ./...)
+      - name: conformance runner (net/http, chi, gin, echo)
+        working-directory: conformance/runners/go
+        run: |
+          go vet ./...
+          go test -v ./... > conformance.log 2>&1 || { cat conformance.log; exit 1; }
+          grep -E 'vectors pass|^ok' conformance.log
+      - name: bench harness builds
+        working-directory: conformance/bench/go
+        run: |
+          go vet ./...
+          go test -run '^$' -bench Process -benchtime 100x ./...

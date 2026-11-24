@@ -136,6 +136,24 @@ importers:
         specifier: 5.9.3
         version: 5.9.3
 
+  conformance/runners/node:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.5
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      express:
+        specifier: ^4.21.2
+        version: 4.22.3
+      fastify:
+        specifier: ^5.6.1
+        version: 5.12.7
+      tsx:
+        specifier: ^4.20.6
+        version: 4.23.15
+
   examples/acme-shop:
     dependencies:
       express:

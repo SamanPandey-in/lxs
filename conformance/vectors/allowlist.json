@@ -1,0 +1,327 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "allowlist",
+  "description": "Allowlisted clients (static config or the policy document) are never blocked and never routed to decoys: the app handles them. A /0 entry in the policy allowlist is ignored.",
+  "vectors": [
+    {
+      "name": "allow-static-overrides-block",
+      "description": "The static allowlist beats the blocklist.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": ["203.0.113.0/24"],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "allow-static-skips-decoy",
+      "description": "An allowlisted client on a decoy path reaches the app.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": ["203.0.113.7"],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "allow-static-strips-ds",
+      "description": "Allowlisted requests still lose client x-ds-* headers.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": ["203.0.113.7"],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-ds-client-ip", "6.6.6.6"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "app": {
+          "headers": {
+            "x-ds-client-ip": null
+          }
+        }
+      }
+    },
+    {
+      "name": "allow-policy-overrides-block",
+      "description": "The policy allowlist beats the blocklist.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": ["203.0.113.7"]
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "allow-policy-matchall-ignored",
+      "description": "A /0 policy allowlist entry is ignored.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": ["0.0.0.0/0"]
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "allow-policy-mapped-matchall-ignored",
+      "description": "A mapped /96 (all of IPv4) is a /0 too.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": ["::ffff:0.0.0.0/96"]
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    },
+    {
+      "name": "allow-uses-derived-ip",
+      "description": "The allowlist is checked against the derived client address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": ["198.51.100.0/24"],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["10.0.0.2", "198.51.100.1"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "allow-not-spoofable",
+      "description": "Without trusted proxies, X-Forwarded-For cannot claim an allowlisted address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": ["198.51.100.0/24"],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "blocked",
+        "status": 403
+      }
+    }
+  ]
+}

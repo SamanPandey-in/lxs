@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lxs.dev/conformance/vector.schema.json",
+  "title": "LXS middleware conformance vector file",
+  "description": "One file per category. See conformance/SPEC.md section 3 for the meaning of every field.",
+  "type": "object",
+  "required": ["category", "vectors"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "category": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "description": { "type": "string" },
+    "vectors": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/vector" } }
+  },
+  "$defs": {
+    "vector": {
+      "type": "object",
+      "required": ["name", "description", "config", "policy", "request", "expect"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Unique across all files. Stable: runners report failures by name.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "description": { "type": "string" },
+        "config": { "$ref": "#/$defs/config" },
+        "policy": { "$ref": "#/$defs/policy" },
+        "request": { "$ref": "#/$defs/request" },
+        "expect": { "$ref": "#/$defs/expect" }
+      }
+    },
+    "config": {
+      "description": "Middleware options, already resolved (no defaults are applied by the runner).",
+      "type": "object",
+      "required": ["mode", "trustProxy", "allowlist", "decoys"],
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "enum": ["enforce", "monitor"] },
+        "trustProxy": {
+          "anyOf": [
+            { "const": false },
+            { "type": "integer", "minimum": 1, "maximum": 10 },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "allowlist": { "type": "array", "items": { "type": "string" } },
+        "decoys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "path", "prefix"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$" },
+              "path": { "type": "string", "pattern": "^/" },
+              "prefix": {
+                "description": "true: also matches every path under path + '/' (web-admin). false: exact (web-bait).",
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "policy": {
+      "description": "The JSON document the agent serves at GET /v1/policy.",
+      "type": "object",
+      "required": ["blocklist", "allowlist"],
+      "additionalProperties": false,
+      "properties": {
+        "blocklist": { "type": "array", "items": { "type": "string" } },
+        "allowlist": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["method", "target", "headers", "remoteAddress"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "pattern": "^[A-Z]+$" },
+        "target": {
+          "description": "The request-target exactly as written on the request line (origin-form or absolute-form).",
+          "type": "string",
+          "minLength": 1
+        },
+        "headers": {
+          "description": "Header lines in order, as [name, value]. Names may repeat. The runner adds Host (if absent), Connection: close and Content-Length (if there is a body).",
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [{ "type": "string", "minLength": 1 }, { "type": "string" }],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "remoteAddress": {
+          "description": "The TCP peer address the app's server sees (IPv4, IPv6 or IPv4-mapped IPv6).",
+          "type": "string"
+        },
+        "body": { "description": "UTF-8 request body.", "type": "string" },
+        "bodyBytes": {
+          "description": "Alternative to body: a body of this many 'a' bytes.",
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "not": { "required": ["body", "bodyBytes"] }
+    },
+    "headerAssertions": {
+      "description": "Lower-case header name -> string (must be present with exactly this value), true (must be present, any non-empty value), null (must be absent).",
+      "type": "object",
+      "propertyNames": { "pattern": "^[a-z0-9-]+$" },
+      "additionalProperties": { "type": ["string", "boolean", "null"], "not": { "const": false } }
+    },
+    "expect": {
+      "type": "object",
+      "required": ["outcome"],
+      "additionalProperties": false,
+      "properties": {
+        "outcome": { "enum": ["pass_through", "decoy", "blocked"] },
+        "app": {
+          "description": "pass_through only.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "headers": { "$ref": "#/$defs/headerAssertions" } }
+        },
+        "decoy": {
+          "description": "decoy only.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "clientIp"],
+          "properties": {
+            "id": { "type": "string", "description": "Expected x-ds-decoy-id." },
+            "clientIp": {
+              "type": "string",
+              "description": "Expected x-ds-client-ip (canonical form)."
+            },
+            "method": { "type": "string" },
+            "target": { "type": "string", "description": "Request-target the decoy receives." },
+            "headers": { "$ref": "#/$defs/headerAssertions" }
+          }
+        },
+        "status": { "description": "blocked only: the response status.", "type": "integer" },
+        "frameworkMayReject": {
+          "description": "The target is malformed enough that an HTTP server or framework may answer 400 before the middleware runs. A runner accepts that (no app hit, no decoy hit); if the middleware does run, the stated outcome applies.",
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "outcome": { "const": "decoy" } } },
+          "then": { "required": ["decoy"] }
+        },
+        {
+          "if": { "properties": { "outcome": { "const": "blocked" } } },
+          "then": { "required": ["status"] }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=../../schema/lxs.schema.json
+# The same config as examples/acme-shop/decoy.config.ts, in the language-neutral format.
+# test/yaml-config.test.ts asserts both produce byte-identical build output.
+service: shop # the app's service name in docker-compose.yml
+mode: enforce # 'monitor' never blocks, even if the platform asks
+# trustProxy: [loopback] # only if a reverse proxy runs in front of the app
+# allowlist: [10.0.0.0/8] # your own scanners and uptime monitors
+
+decoys:
+  # Web decoys: a path on your own domain.
+  - type: web-admin
+    path: /admin
+    brand: Acme Shop
+    acceptCredentials:
+      - [admin, admin]
+    panel: customers
+  - type: web-bait
+    path: /.env # template inferred from the path
+  - type: web-bait
+    path: /backup.sql
+  # Network decoys: a host port.
+  - type: ssh
+    port: 2222
+    persona: db-backup
+    hostname: db-backup-01
+    credentials: weak-defaults
+  - type: redis
+    port: 6380
+    seed: finance
+    requirePassword: false
+  - type: postgres
+    port: 5433
+    seed: shop
+    requirePassword: true
+
+# Real routes worth naming in alerts.
+assets:
+  - pattern: /api/payments/*
+    name: Payments API
+    criticality: critical
+  - pattern: /api/*
+    name: Shop API
+
+# A fake key in the same format as the real ones; planted in /.env and on the SSH box.
+honeytokens:
+  apiKey:
+    header: authorization
+    prefix: acme_live_

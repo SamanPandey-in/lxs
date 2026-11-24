@@ -31,10 +31,12 @@
         "default": "./dist/testing.cjs"
       }
     },
+    "./schema/lxs.schema.json": "./schema/lxs.schema.json",
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "schema",
     "README.md"
   ],
   "engines": {
@@ -44,6 +46,7 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "schema": "node --import tsx scripts/gen-schema.ts",
     "test": "node --test --import tsx test/*.test.ts"
   },
   "dependencies": {

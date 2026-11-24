@@ -6,3 +6,4 @@ packages:
   - 'apps/simulator'
   - 'sdk/*'
   - 'examples/*'
+  - 'conformance/runners/*'

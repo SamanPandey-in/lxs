@@ -1,0 +1,132 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "mode",
+  "description": "monitor never blocks; decoys are served in both modes.",
+  "vectors": [
+    {
+      "name": "mode-monitor-never-blocks",
+      "description": "monitor: a blocklisted client passes through.",
+      "config": {
+        "mode": "monitor",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "mode-monitor-serves-decoys",
+      "description": "monitor: decoys are still served.",
+      "config": {
+        "mode": "monitor",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7"
+        }
+      }
+    },
+    {
+      "name": "mode-monitor-blocklisted-decoy",
+      "description": "monitor: a blocklisted client on a decoy path gets the decoy.",
+      "config": {
+        "mode": "monitor",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": ["203.0.113.7"],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7"
+        }
+      }
+    }
+  ]
+}

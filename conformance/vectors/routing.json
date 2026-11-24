@@ -1,0 +1,934 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "routing",
+  "description": "Which request targets are routed to a decoy. Matching uses the path only (no query), percent-decoded once, with one trailing slash removed; it is case-sensitive and does not collapse slashes or resolve dot segments.",
+  "vectors": [
+    {
+      "name": "route-exact-bait",
+      "description": "An exact web-bait path is proxied to the decoy with its id.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "method": "GET",
+          "target": "/.env"
+        }
+      }
+    },
+    {
+      "name": "route-query-kept",
+      "description": "The query string is ignored for matching and forwarded verbatim.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env?debug=1&x=%2e",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "target": "/.env?debug=1&x=%2e"
+        }
+      }
+    },
+    {
+      "name": "route-prefix-root",
+      "description": "A prefix (web-admin) decoy matches its own path.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "target": "/admin"
+        }
+      }
+    },
+    {
+      "name": "route-prefix-subpath",
+      "description": "A prefix decoy matches paths below it.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin/login",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "target": "/admin/login"
+        }
+      }
+    },
+    {
+      "name": "route-prefix-post-body",
+      "description": "Method and body go to the decoy (a login attempt).",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "POST",
+        "target": "/admin/login",
+        "headers": [["content-type", "application/x-www-form-urlencoded"]],
+        "remoteAddress": "203.0.113.7",
+        "body": "user=admin&pass=admin"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "method": "POST",
+          "target": "/admin/login",
+          "headers": {
+            "content-type": "application/x-www-form-urlencoded",
+            "content-length": "21"
+          }
+        }
+      }
+    },
+    {
+      "name": "route-prefix-lookalike",
+      "description": "A prefix decoy does not match a longer sibling name.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/administrator",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-exact-no-subpath",
+      "description": "An exact decoy does not match paths below it.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env/extra",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-exact-suffix",
+      "description": "An exact decoy does not match a longer name.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env.bak",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-other-bait",
+      "description": "A second exact decoy is matched with its own id.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "HEAD",
+        "target": "/backup.sql",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-backup-sql",
+          "clientIp": "203.0.113.7",
+          "method": "HEAD",
+          "target": "/backup.sql"
+        }
+      }
+    },
+    {
+      "name": "route-trailing-slash-exact",
+      "description": "One trailing slash is ignored; the target is forwarded unchanged.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env/",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "target": "/.env/"
+        }
+      }
+    },
+    {
+      "name": "route-two-trailing-slashes",
+      "description": "Only one trailing slash is removed.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env//",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-case-sensitive-exact",
+      "description": "Matching is case-sensitive.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.ENV",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-encoded-dot-lower",
+      "description": "Percent-encoding is decoded once before matching (%2e).",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/%2eenv",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "target": "/%2eenv"
+        }
+      }
+    },
+    {
+      "name": "route-encoded-slash",
+      "description": "An encoded slash is decoded before the prefix test.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin%2Flogin",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7",
+          "target": "/admin%2Flogin"
+        }
+      }
+    },
+    {
+      "name": "route-double-encoded",
+      "description": "Decoding happens once only: %252e stays %2e.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/%252eenv",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-invalid-escape",
+      "description": "An invalid escape makes the whole path undecodable: it is matched raw.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/%2eenv%zz",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "frameworkMayReject": true
+      }
+    },
+    {
+      "name": "route-invalid-utf8",
+      "description": "Escapes that decode to invalid UTF-8 also leave the path raw.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/%2eenv%ff",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "frameworkMayReject": true
+      }
+    },
+    {
+      "name": "route-leading-double-slash",
+      "description": "Slashes are not collapsed.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "//.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-inner-double-slash-prefix",
+      "description": "A double slash below a prefix decoy is still below it.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/admin//login",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-admin-admin",
+          "clientIp": "203.0.113.7"
+        }
+      }
+    },
+    {
+      "name": "route-dot-segments-not-resolved",
+      "description": "Dot segments are not resolved.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/x/../.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through"
+      }
+    },
+    {
+      "name": "route-absolute-form",
+      "description": "An absolute-form target is reduced to its path for matching and forwarding.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "http://shop.example/.env",
+        "headers": [],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "target": "/.env"
+        }
+      }
+    },
+    {
+      "name": "route-ordinary-traffic",
+      "description": "Ordinary traffic passes through to the app.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/api/products?page=2",
+        "headers": [["user-agent", "Mozilla/5.0"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "pass_through",
+        "app": {
+          "headers": {
+            "user-agent": "Mozilla/5.0"
+          }
+        }
+      }
+    }
+  ]
+}

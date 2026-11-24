@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lxs.dev/schema/lxs.schema.json",
+  "title": "lxs.yaml",
+  "description": "LXS honeypots-as-code config. Same content as a defineConfig({...}) object in decoy.config.ts.",
+  "type": "object",
+  "properties": {
+    "service": {
+      "default": "app",
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_.-]*$"
+    },
+    "mode": {
+      "default": "enforce",
+      "type": "string",
+      "enum": ["monitor", "enforce"]
+    },
+    "runDir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trustProxy": {
+      "default": false,
+      "anyOf": [
+        {
+          "type": "boolean",
+          "const": false
+        },
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "allowlist": {
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disabled": {
+      "type": "boolean"
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "dir": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._/~-]{1,256}$"
+        },
+        "sources": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["firewall", "auth"]
+          }
+        }
+      },
+      "required": ["dir"]
+    },
+    "$schema": {
+      "description": "Optional JSON Schema reference for editors.",
+      "type": "string"
+    },
+    "decoys": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "brand": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "acceptCredentials": {
+                "maxItems": 20,
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "prefixItems": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              },
+              "acceptAfter": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "panel": {
+                "type": "string",
+                "enum": ["customers", "none"]
+              },
+              "type": {
+                "type": "string",
+                "const": "web-admin"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^\\/",
+                "description": "Path on your own domain, e.g. '/admin' or '/.env'. Exact match (web-admin also covers sub-paths)."
+              }
+            },
+            "required": ["type", "path"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "template": {
+                "type": "string",
+                "enum": ["dotenv", "sql-dump", "git-config", "wp-login", "phpmyadmin"]
+              },
+              "breadcrumbs": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "const": "web-bait"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^\\/",
+                "description": "Path on your own domain, e.g. '/admin' or '/.env'. Exact match (web-admin also covers sub-paths)."
+              }
+            },
+            "required": ["type", "path"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "persona": {
+                "type": "string",
+                "enum": ["db-backup", "web-server"]
+              },
+              "hostname": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "credentials": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "const": "weak-defaults"
+                  },
+                  {
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "prefixItems": [
+                        {
+                          "type": "string",
+                          "pattern": "^[!-~]{1,64}$"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^[ -~]{1,128}$"
+                        }
+                      ],
+                      "items": false,
+                      "minItems": 2,
+                      "maxItems": 2
+                    }
+                  }
+                ]
+              },
+              "banner": {
+                "type": "string",
+                "pattern": "^SSH-2\\.0-[\\x21-\\x7e ]{1,80}$"
+              },
+              "type": {
+                "type": "string",
+                "const": "ssh"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "Host port the network decoy listens on."
+              }
+            },
+            "required": ["type", "port"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "seed": {
+                "type": "string",
+                "enum": ["finance", "sessions"]
+              },
+              "requirePassword": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "const": "redis"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "Host port the network decoy listens on."
+              }
+            },
+            "required": ["type", "port"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+              },
+              "seed": {
+                "type": "string",
+                "enum": ["shop", "finance"]
+              },
+              "requirePassword": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "const": "postgres"
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "Host port the network decoy listens on."
+              }
+            },
+            "required": ["type", "port"],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "criticality": {
+            "type": "string",
+            "enum": ["normal", "critical"]
+          },
+          "critical": {
+            "type": "boolean"
+          },
+          "pattern": {
+            "type": "string",
+            "pattern": "^\\/",
+            "description": "Absolute path, optionally ending in '/*' for a subtree, e.g. '/api/payments/*'."
+          }
+        },
+        "required": ["pattern"],
+        "additionalProperties": false
+      }
+    },
+    "honeytokens": {
+      "anyOf": [
+        {
+          "type": "boolean",
+          "const": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "apiKey": {
+              "type": "object",
+              "properties": {
+                "header": {
+                  "type": "string",
+                  "enum": ["authorization", "x-api-key"]
+                },
+                "prefix": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9_-]{2,32}$"
+                }
+              },
+              "required": ["header", "prefix"]
+            },
+            "canaryRows": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

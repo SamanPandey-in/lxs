@@ -5,6 +5,7 @@ import { AssetMatcher, type DecoyMatch, DecoyMatcher, pathOnly } from '../matche
 import {
   buildIpPredicate,
   type CidrMatcher,
+  canonicalIp,
   isMatchAll,
   isValidIp,
   parseCidr,
@@ -138,6 +139,18 @@ export function makeClientIp(
     ? buildIpPredicate(trust)
     : null;
   const hopCount = typeof trust === 'number' && Number.isInteger(trust) && trust > 0 ? trust : 0;
+  const derive = deriveClientIp(trusted, hopCount, devSim);
+  return (req) => {
+    const ip = derive(req);
+    return canonicalIp(ip) ?? ip;
+  };
+}
+
+function deriveClientIp(
+  trusted: ((ip: string) => boolean) | null,
+  hopCount: number,
+  devSim: boolean,
+): (req: IncomingMessage) => string {
   return (req) => {
     const sock = stripMapped(req.socket?.remoteAddress ?? '');
     if (devSim) {
@@ -360,9 +373,15 @@ export function createCore(
       if (entry.includes('/')) {
         const m = parseCidr(entry);
         if (m) next.blockCidrs.push(m);
-      } else if (parseIp(entry)) next.blocklist.add(stripMapped(entry));
+      } else {
+        const ip = canonicalIp(entry);
+        if (ip) next.blocklist.add(ip);
+      }
     }
-    for (const ip of list(o.watchlist)) if (parseIp(ip)) next.watchlist.add(stripMapped(ip));
+    for (const entry of list(o.watchlist)) {
+      const ip = canonicalIp(entry);
+      if (ip) next.watchlist.add(ip);
+    }
     const ht = o.honeytokens;
     if (ht && typeof ht === 'object') {
       for (const [hash, id] of Object.entries(ht as Record<string, unknown>)) {
@@ -395,6 +414,7 @@ export function createCore(
     res: ServerResponse,
     decoy: DecoyMatch,
     ip: string,
+    target: string,
   ): void => {
     const headers: http.OutgoingHttpHeaders = {};
     for (const [k, v] of Object.entries(req.headers)) {
@@ -426,7 +446,7 @@ export function createCore(
     }
 
     const preq = http.request(
-      { socketPath: webSock, method: req.method, path: req.url, headers },
+      { socketPath: webSock, method: req.method, path: target, headers },
       (pres) => {
         if (finished) {
           pres.resume();
@@ -469,13 +489,19 @@ export function createCore(
   /* ---- hot path ---- */
   return {
     process(req, res) {
+      // Every 'pass' goes through here: the app never sees a client-supplied x-ds-* header, so it
+      // cannot be fooled into trusting a forged x-ds-client-ip (or anything else in our namespace).
+      const pass = (): 'pass' => {
+        stripDsHeaders(req);
+        return 'pass';
+      };
       try {
-        if (!active) return 'pass';
+        if (!active) return pass();
         const ip = clientIp(req);
-        if (staticAllow !== null && staticAllow(ip)) return 'pass';
-        if (policy.allow !== null && policy.allow(ip)) return 'pass';
+        if (staticAllow !== null && staticAllow(ip)) return pass();
+        if (policy.allow !== null && policy.allow(ip)) return pass();
 
-        const url = req.url;
+        const url = originForm(req.url);
         const path = pathOnly(url);
         const method = req.method ?? 'GET';
 
@@ -496,7 +522,7 @@ export function createCore(
         if (hasWebDecoys) {
           const decoy = decoyMatcher.match(path);
           if (decoy) {
-            proxyToDecoy(req, res, decoy, ip);
+            proxyToDecoy(req, res, decoy, ip, url);
             return 'handled'; // never next(): the real app must not see decoy paths
           }
         }
@@ -538,11 +564,15 @@ export function createCore(
             });
           }
         }
-        return 'pass';
+        return pass();
       } catch (err) {
         errors++;
         warnOnce('hotpath', `request handling error (failing open): ${(err as Error).message}`);
-        return 'pass';
+        try {
+          return pass();
+        } catch {
+          return 'pass';
+        }
       }
     },
     close() {
@@ -556,6 +586,37 @@ export function createCore(
   function isBlockedByCidr(ip: string): boolean {
     const p = parseIp(ip);
     return p !== null && policy.blockCidrs.some((m) => m(p));
+  }
+}
+
+/**
+ * The request target in origin form. An absolute-form target (`GET http://host/.env`, which Node
+ * hands over verbatim and Express/Fastify route by its path) is reduced to its path and query, so it
+ * cannot sidestep decoy matching.
+ */
+export function originForm(url: string | undefined): string {
+  if (!url) return '/';
+  if (url.charCodeAt(0) === 47) return url;
+  const m = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*(.*)$/.exec(url);
+  if (!m) return url;
+  const rest = m[1] ?? '';
+  return rest.startsWith('/') ? rest : `/${rest}`;
+}
+
+/** Deletes every x-ds-* header (our namespace) from the request the app will see. */
+export function stripDsHeaders(req: IncomingMessage): void {
+  let found = false;
+  for (const k of Object.keys(req.headers)) {
+    if (k.startsWith('x-ds-')) {
+      delete req.headers[k];
+      found = true;
+    }
+  }
+  if (!found) return;
+  const raw = req.rawHeaders;
+  if (!Array.isArray(raw)) return;
+  for (let i = raw.length - 2; i >= 0; i -= 2) {
+    if (String(raw[i]).toLowerCase().startsWith('x-ds-')) raw.splice(i, 2);
   }
 }
 

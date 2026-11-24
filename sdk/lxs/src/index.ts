@@ -29,3 +29,4 @@ export type {
   WebDecoyType,
 } from './types.js';
 export { SDK_VERSION } from './version.js';
+export { loadLxsYaml, loadYamlConfig } from './yaml-config.js';

@@ -1,0 +1,784 @@
+{
+  "$schema": "../schema/vector.schema.json",
+  "category": "client-ip",
+  "description": "Deriving the client address: the socket peer unless proxies are trusted; X-Forwarded-For is walked from the right and never read past the first untrusted hop. Results are canonical (IPv4-mapped IPv6 becomes IPv4; IPv6 is RFC 5952).",
+  "vectors": [
+    {
+      "name": "ip-no-proxy-ignores-xff",
+      "description": "trustProxy false: X-Forwarded-For is ignored.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7",
+          "headers": {
+            "x-forwarded-for": "198.51.100.1"
+          }
+        }
+      }
+    },
+    {
+      "name": "ip-hop1",
+      "description": "One trusted hop: the rightmost X-Forwarded-For entry is the client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-hop1-spoofed-left",
+      "description": "One trusted hop: entries the client added on the left are ignored.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "garbage, 6.6.6.6, 198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-hop2",
+      "description": "Two trusted hops: the second entry from the right is the client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 2,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "6.6.6.6, 198.51.100.1, 10.0.0.5"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-hop2-short-chain",
+      "description": "Fewer entries than hops: the leftmost entry is the client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 2,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-hop-no-xff",
+      "description": "A hop count without X-Forwarded-For falls back to the socket address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "10.0.0.2"
+        }
+      }
+    },
+    {
+      "name": "ip-hop-invalid-entry",
+      "description": "An invalid entry within the trusted hops yields the socket address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "unknown"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "10.0.0.2"
+        }
+      }
+    },
+    {
+      "name": "ip-hop-entry-with-port",
+      "description": "host:port is not an address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1:4711"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "10.0.0.2"
+        }
+      }
+    },
+    {
+      "name": "ip-hop-multiple-header-lines",
+      "description": "Several X-Forwarded-For lines are one list, in order.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "6.6.6.6"], ["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-hop-whitespace",
+      "description": "Entries are trimmed.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "6.6.6.6 ,\t198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-list-first-untrusted",
+      "description": "Trusted-proxy list: walk from the right past trusted entries.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": ["10.0.0.0/8"],
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "6.6.6.6, 198.51.100.1, 10.1.1.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-list-untrusted-socket",
+      "description": "Trusted-proxy list: an untrusted peer's X-Forwarded-For is ignored.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": ["10.0.0.0/8"],
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7"
+        }
+      }
+    },
+    {
+      "name": "ip-list-all-trusted",
+      "description": "Every entry trusted: the leftmost is the client.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": ["10.0.0.0/8"],
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "10.9.9.9, 10.1.1.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "10.9.9.9"
+        }
+      }
+    },
+    {
+      "name": "ip-list-named-range",
+      "description": "Named ranges (loopback, uniquelocal, linklocal) are accepted.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": ["loopback"],
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1"]],
+        "remoteAddress": "127.0.0.1"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    },
+    {
+      "name": "ip-list-invalid-entry",
+      "description": "An invalid entry reached while walking yields the socket address.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": ["10.0.0.0/8"],
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "198.51.100.1, , 10.1.1.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "10.0.0.2"
+        }
+      }
+    },
+    {
+      "name": "ip-mapped-socket",
+      "description": "An IPv4-mapped socket address is reported as IPv4.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": false,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [],
+        "remoteAddress": "::ffff:203.0.113.7"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "203.0.113.7"
+        }
+      }
+    },
+    {
+      "name": "ip-ipv6-noncanonical-xff",
+      "description": "An IPv6 entry is reported in RFC 5952 form.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "2001:DB8:0:0:0:0:0:BAD"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "2001:db8::bad"
+        }
+      }
+    },
+    {
+      "name": "ip-mapped-xff",
+      "description": "An IPv4-mapped entry is reported as IPv4.",
+      "config": {
+        "mode": "enforce",
+        "trustProxy": 1,
+        "allowlist": [],
+        "decoys": [
+          {
+            "id": "web-admin-admin",
+            "path": "/admin",
+            "prefix": true
+          },
+          {
+            "id": "web-bait-env",
+            "path": "/.env",
+            "prefix": false
+          },
+          {
+            "id": "web-bait-backup-sql",
+            "path": "/backup.sql",
+            "prefix": false
+          }
+        ]
+      },
+      "policy": {
+        "blocklist": [],
+        "allowlist": []
+      },
+      "request": {
+        "method": "GET",
+        "target": "/.env",
+        "headers": [["x-forwarded-for", "::ffff:198.51.100.1"]],
+        "remoteAddress": "10.0.0.2"
+      },
+      "expect": {
+        "outcome": "decoy",
+        "decoy": {
+          "id": "web-bait-env",
+          "clientIp": "198.51.100.1"
+        }
+      }
+    }
+  ]
+}

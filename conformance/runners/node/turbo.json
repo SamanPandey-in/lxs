@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/conformance/vectors/**",
+        "$TURBO_ROOT$/conformance/schema/**",
+        "$TURBO_ROOT$/sdk/lxs/src/**"
+      ]
+    }
+  }
+}
