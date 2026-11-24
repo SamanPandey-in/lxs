@@ -41,6 +41,7 @@ import {
 } from "@/components/ui";
 import { BlockModal, describeEvent, RelativeTime, UnblockModal } from "@/components/workspace";
 import { api, PROJECT } from "@/lib/core";
+import { replayBadge } from "@/lib/first-run";
 import { usePolling } from "@/lib/hooks";
 import { EVENT_LABEL, ruleName, SEVERITY, STAGE_LABEL } from "@/lib/labels";
 import { storeActions } from "@/lib/store";
@@ -1059,6 +1060,11 @@ function IncidentDetail() {
               <SeverityPill severity={inc.severity} />
               <LabelPill label={inc.label} />
               <StatusPill status={inc.status} />
+              {replayBadge(inc) ? (
+                <Badge variant="tag" tone="info" title={replayBadge(inc).title}>
+                  {replayBadge(inc).label}
+                </Badge>
+              ) : null}
             </span>
             <span className="flex min-w-0 items-baseline gap-2">
               <span className="shrink-0 tabular-nums">

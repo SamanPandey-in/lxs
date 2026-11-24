@@ -209,6 +209,22 @@ export async function agentRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true, policy_version: p?.v ?? 0, server_time: new Date().toISOString() };
   });
 
+  /** Read-only key check for `lxs doctor`: which project this key writes to. Registers no sensor and changes nothing (beyond the key's last-used stamp). */
+  app.get('/v1/agent/whoami', pre, async (req) => {
+    const auth = req.ingest!;
+    const [p] = await db
+      .select({ id: projects.id, name: projects.name, environment: projects.environment })
+      .from(projects)
+      .where(eq(projects.id, auth.projectId))
+      .limit(1);
+    if (!p) throw notFound('Project');
+    return {
+      project: { id: p.id, name: p.name, environment: p.environment },
+      key_prefix: auth.keyPrefix,
+      scopes: auth.scopes,
+    };
+  });
+
   app.get('/v1/agent/policy', pre, async (req, reply) => {
     const auth = req.ingest!;
     const [p] = await db

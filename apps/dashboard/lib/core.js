@@ -333,6 +333,17 @@ export const api = {
     call(`/v1/projects/${e(pid)}/onboarding`, undefined, () => mock.onboarding()),
   replay: (pid = PROJECT, body = { scenario: "ps-use-case" }) =>
     mutate(`/v1/projects/${e(pid)}/demo/replay`, "POST", body),
+  // First run: a labelled test hit on the user's own project, and removable sample data.
+  testHit: (pid = PROJECT) => mutate(`/v1/projects/${e(pid)}/demo/test-hit`, "POST", {}),
+  sampleStatus: (pid = PROJECT) =>
+    call(`/v1/projects/${e(pid)}/demo/sample-data`, undefined, () => ({
+      loaded: false,
+      sample_events: 0,
+      sample_incidents: 0,
+      real_events: 1, // mock mode never offers sample data
+    })),
+  loadSample: (pid = PROJECT) => mutate(`/v1/projects/${e(pid)}/demo/sample-data`, "POST", {}),
+  clearSample: (pid = PROJECT) => mutate(`/v1/projects/${e(pid)}/demo/sample-data`, "DELETE"),
   system: () => call("/v1/system", undefined, () => mock.system()),
   retryJob: (id) => mutate(`/v1/system/jobs/${e(id)}/retry`, "POST"),
   iocsUrl: (pid, iid, fmt) =>
@@ -420,6 +431,10 @@ export function setActiveProject(projectId) {
   "settings",
   "onboarding",
   "replay",
+  "testHit",
+  "sampleStatus",
+  "loadSample",
+  "clearSample",
   "iocs",
 ].forEach((k) => {
   const orig = api[k];

@@ -18,6 +18,7 @@ type World = Awaited<ReturnType<typeof buildWorld>>;
 /** Routes that do not address a tenant's resources by id, and why that is safe. */
 const NOT_TENANT_SCOPED: Record<string, string> = {
   'GET /healthz': 'liveness probe, no data',
+  'GET /metrics': 'process-wide Prometheus counters, no tenant data; METRICS_TOKEN bearer',
   'GET /readyz': 'readiness probe, no data',
   'GET /v1/auth/config': 'public captcha config',
   'POST /v1/auth/login': 'public; returns only the caller',
@@ -38,6 +39,7 @@ const NOT_TENANT_SCOPED: Record<string, string> = {
   'POST /v1/agent/register': 'project comes from the bearer key',
   'POST /v1/agent/heartbeat': 'project comes from the bearer key',
   'GET /v1/agent/policy': 'project comes from the bearer key',
+  'GET /v1/agent/whoami': 'project comes from the bearer key',
   'POST /v1/agent/selftest-report': 'project comes from the bearer key',
 };
 

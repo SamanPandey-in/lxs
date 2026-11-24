@@ -1,11 +1,13 @@
 import { randomInt } from 'node:crypto';
-import type { FastifyInstance } from 'fastify';
+import { and, sql as dsql, eq, inArray } from 'drizzle-orm';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ulid } from 'ulid';
 import { z } from 'zod';
 import { db } from '../db/client.js';
+import { events } from '../db/schema.js';
 import { env } from '../env.js';
 import { audit } from '../lib/audit.js';
-import { HttpError } from '../lib/errors.js';
+import { conflict, HttpError } from '../lib/errors.js';
 import { parse } from '../lib/parse.js';
 import { projectAccess, requireSession } from '../plugins/auth-session.js';
 import { ingestEvents } from './ingest.js';
@@ -387,11 +389,16 @@ export function resolveScenario(requested: string): string {
  * spread backwards by their gaps. `scenario` is resolved again so this is safe to
  * call with any client-supplied name.
  */
-export function buildReplayEvents(scenario: string, ip: string, now = Date.now()): Ev[] {
+export function buildReplayEvents(
+  scenario: string,
+  ip: string,
+  now = Date.now(),
+  sessionPrefix = 'demo',
+): Ev[] {
   const steps = SCENARIOS[resolveScenario(scenario)]!(ip);
   const total = steps.reduce((s, x) => s + x.gap, 0);
   let t = now - total * 1000;
-  const session = `demo-${ulid().slice(-8)}`;
+  const session = `${sessionPrefix}-${ulid().slice(-8)}`;
   return steps.map((s) => {
     t += s.gap * 1000;
     return {
@@ -449,5 +456,182 @@ export async function demoRoutes(app: FastifyInstance): Promise<void> {
       duplicates: res.duplicates,
       rejected: res.rejected,
     });
+  });
+
+  await firstRunRoutes(app);
+}
+
+/* ───────────────────────── first run: test hit and sample data ─────────────────────────
+ * Both reuse the replay machinery above, on any project (not only demo ones), with fixed
+ * scenarios and addresses from the documentation ranges, so they can never be mistaken for
+ * (or collide with) a real source. Every event is `simulated`; sample data is also `sample`,
+ * which is what "Clear sample data" deletes. Incident summaries surface both flags.
+ */
+
+/** One safe, short story that always opens an incident: a hydra-style burst at /admin ending on admin/admin. */
+export const TEST_HIT_SCENARIO = 'web-bruteforce';
+/** Test hits come from TEST-NET-3 (RFC 5737), like the demo replays. */
+export const testHitIp = (): string => `203.0.113.${randomInt(2, 250)}`;
+
+/** The canned stories behind sample data, each from its own TEST-NET-1 address. */
+export const SAMPLE_SET: ReadonlyArray<{ scenario: string; ip: string; minutesAgo: number }> = [
+  { scenario: 'targeted', ip: '192.0.2.10', minutesAgo: 42 },
+  { scenario: 'opportunistic', ip: '192.0.2.24', minutesAgo: 27 },
+  { scenario: 'web-exploit', ip: '192.0.2.37', minutesAgo: 15 },
+  { scenario: 'noise', ip: '192.0.2.51', minutesAgo: 4 },
+];
+
+export function buildSampleEvents(now = Date.now()): Ev[] {
+  return SAMPLE_SET.flatMap((s) =>
+    buildReplayEvents(s.scenario, s.ip, now - s.minutesAgo * 60_000, 'sample'),
+  );
+}
+
+/** Per project, not per IP: a team sharing a NAT should not exhaust each other's budget. */
+export const FIRST_RUN_LIMIT = { max: 5, timeWindow: '1 hour' } as const;
+const perProject = (what: 'test-hit' | 'sample-data') => ({
+  rateLimit: {
+    ...FIRST_RUN_LIMIT,
+    keyGenerator: (req: FastifyRequest) => `${what}:${(req.params as { pid?: string }).pid ?? ''}`,
+    errorResponseBuilder: (_req: unknown, ctx: { max: number; after: string }) => ({
+      statusCode: 429,
+      code: 'rate_limited',
+      message: `${what === 'test-hit' ? 'Test hits' : 'Sample data loads'} are limited to ${ctx.max} per hour per project. Retry in ${ctx.after}.`,
+    }),
+  },
+});
+
+export interface SampleStatus {
+  loaded: boolean;
+  sample_events: number;
+  sample_incidents: number;
+  real_events: number;
+}
+
+export async function sampleStatus(projectId: string): Promise<SampleStatus> {
+  const [row] = (await db.execute(dsql`
+    select
+      (select count(*) from events where project_id = ${projectId}::uuid and sample)::int as sample_events,
+      (select count(distinct incident_id) from events where project_id = ${projectId}::uuid and sample and incident_id is not null)::int as sample_incidents,
+      (select count(*) from events where project_id = ${projectId}::uuid and not simulated)::int as real_events
+  `)) as unknown as Omit<SampleStatus, 'loaded'>[];
+  const r = row ?? { sample_events: 0, sample_incidents: 0, real_events: 0 };
+  return { loaded: r.sample_events > 0, ...r };
+}
+
+/**
+ * Deletes sample events, then incidents and attackers that only sample events built. One
+ * statement, so it is atomic. The `not e.sample` guards see the pre-delete snapshot: an
+ * incident or attacker that also has real events is kept (and only loses the sample ones).
+ */
+export async function clearSampleData(
+  projectId: string,
+): Promise<{ events: number; incidents: number; attackers: number }> {
+  const [row] = (await db.execute(dsql`
+    with ev as (
+      delete from events where project_id = ${projectId}::uuid and sample
+      returning incident_id, attacker_id
+    ), inc as (
+      delete from incidents i
+      where i.project_id = ${projectId}::uuid
+        and i.id in (select incident_id from ev where incident_id is not null)
+        and not exists (select 1 from events e where e.incident_id = i.id and not e.sample)
+      returning i.id
+    ), att as (
+      delete from attackers a
+      where a.project_id = ${projectId}::uuid
+        and a.id in (select attacker_id from ev where attacker_id is not null)
+        and not exists (select 1 from events e where e.attacker_id = a.id and not e.sample)
+      returning a.id
+    )
+    select (select count(*) from ev)::int as events,
+           (select count(*) from inc)::int as incidents,
+           (select count(*) from att)::int as attackers
+  `)) as unknown as { events: number; incidents: number; attackers: number }[];
+  return row ?? { events: 0, incidents: 0, attackers: 0 };
+}
+
+export async function firstRunRoutes(app: FastifyInstance): Promise<void> {
+  const pid = (req: FastifyRequest) => (req.params as { pid: string }).pid;
+
+  app.post(
+    '/v1/projects/:pid/demo/test-hit',
+    { preHandler: requireSession, config: perProject('test-hit') },
+    async (req, reply) => {
+      const { project, user } = await projectAccess(req, pid(req), 'analyst');
+      const ip = testHitIp();
+      const raw = buildReplayEvents(TEST_HIT_SCENARIO, ip, Date.now(), 'test');
+      const res = await ingestEvents({ projectId: project.id, rawEvents: raw });
+      await audit(db, {
+        orgId: project.orgId,
+        projectId: project.id,
+        actorType: 'user',
+        actorId: user.id,
+        action: 'demo.test_hit',
+        metadata: { scenario: TEST_HIT_SCENARIO, src_ip: ip, events: res.accepted },
+        req,
+      });
+      return reply.status(202).send({
+        test: true,
+        scenario: TEST_HIT_SCENARIO,
+        src_ip: ip,
+        session_id: raw[0]?.session_id ?? null,
+        accepted: res.accepted,
+        sent_at: new Date().toISOString(),
+      });
+    },
+  );
+
+  app.get('/v1/projects/:pid/demo/sample-data', { preHandler: requireSession }, async (req) => {
+    const { project } = await projectAccess(req, pid(req));
+    return sampleStatus(project.id);
+  });
+
+  app.post(
+    '/v1/projects/:pid/demo/sample-data',
+    { preHandler: requireSession, config: perProject('sample-data') },
+    async (req, reply) => {
+      const { project, user } = await projectAccess(req, pid(req), 'analyst');
+      const before = await sampleStatus(project.id);
+      if (before.loaded) throw conflict('Sample data is already loaded; clear it first');
+      const raw = buildSampleEvents();
+      const res = await ingestEvents({ projectId: project.id, rawEvents: raw });
+      // ingest has no notion of "sample"; tag what it stored. The worker never reads this column,
+      // so it does not matter whether it has already picked the events up.
+      if (res.eventIds.length > 0)
+        await db
+          .update(events)
+          .set({ sample: true })
+          .where(and(eq(events.projectId, project.id), inArray(events.id, res.eventIds)));
+      await audit(db, {
+        orgId: project.orgId,
+        projectId: project.id,
+        actorType: 'user',
+        actorId: user.id,
+        action: 'demo.sample_loaded',
+        metadata: { scenarios: SAMPLE_SET.map((s) => s.scenario), events: res.accepted },
+        req,
+      });
+      return reply.status(202).send({
+        sample: true,
+        scenarios: SAMPLE_SET.map((s) => ({ scenario: s.scenario, src_ip: s.ip })),
+        accepted: res.accepted,
+      });
+    },
+  );
+
+  app.delete('/v1/projects/:pid/demo/sample-data', { preHandler: requireSession }, async (req) => {
+    const { project, user } = await projectAccess(req, pid(req), 'analyst');
+    const deleted = await clearSampleData(project.id);
+    await audit(db, {
+      orgId: project.orgId,
+      projectId: project.id,
+      actorType: 'user',
+      actorId: user.id,
+      action: 'demo.sample_cleared',
+      metadata: deleted,
+      req,
+    });
+    return { deleted };
   });
 }

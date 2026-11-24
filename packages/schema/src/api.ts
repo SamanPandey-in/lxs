@@ -60,6 +60,10 @@ export const IncidentSummary = z.object({
     .enum(['pending', 'generating', 'ready', 'fallback', 'failed', 'error'])
     .default('pending'),
   ai_headline: z.string().nullable().optional(),
+  /** Built from replayed events (an onboarding test hit or sample data), not a real attacker. */
+  simulated: z.boolean().optional(),
+  /** Built from onboarding sample data; removed by "Clear sample data". */
+  sample: z.boolean().optional(),
 });
 export type IncidentSummary = z.infer<typeof IncidentSummary>;
 

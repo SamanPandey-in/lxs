@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { replayBadge } from "@/lib/first-run";
 import { cn } from "@/lib/utils";
 
 /*
@@ -33,15 +34,21 @@ function metaTags(i) {
 }
 
 function MetaLine({ i, className }) {
+  const replay = replayBadge(i); // "Sample data" / "Test" outranks the other tags
   const tags = metaTags(i);
-  const shown = tags.slice(0, 1); // label + 1 tag = 2 badges max
-  const rest = tags.slice(1);
+  const shown = replay ? [] : tags.slice(0, 1); // label + 1 tag = 2 badges max
+  const rest = replay ? tags : tags.slice(1);
   return (
     <span className={cn("flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden", className)}>
       <span translate="no" className="shrink-0 font-mono text-xs text-muted-foreground">
         {i.src_ip}
       </span>
       <LabelPill label={i.label} />
+      {replay ? (
+        <Badge variant="tag" tone="info" title={replay.title}>
+          {replay.label}
+        </Badge>
+      ) : null}
       {shown.map((t) => (
         <Badge key={t} variant="tag" tone="bad">
           {t}

@@ -181,16 +181,16 @@ test('build refuses when secrets are not git-ignored, the service is missing, or
   await assert.rejects(runBuild({ cwd: c, log: quiet }), /E_KEY_IN_CONFIG/);
 });
 
-test('init scaffolds the config, env files and gitignore entries without clobbering', () => {
+test('init scaffolds the config, env files and gitignore entries without clobbering', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ds-init-'));
   fs.writeFileSync(path.join(dir, '.gitignore'), 'node_modules');
-  runInit({ cwd: dir, service: 'shop', log: () => undefined });
+  await runInit({ cwd: dir, service: 'shop', interactive: false, env: {}, log: () => undefined });
   assert.match(fs.readFileSync(path.join(dir, 'decoy.config.ts'), 'utf8'), /service: 'shop'/);
   const gi = fs.readFileSync(path.join(dir, '.gitignore'), 'utf8');
   assert.match(gi, /\.env\.lxs\n/);
   assert.match(gi, /\.lxs\/secrets\//);
   assert.ok(fs.existsSync(path.join(dir, '.env.lxs.example')));
   fs.writeFileSync(path.join(dir, 'decoy.config.ts'), '// mine');
-  runInit({ cwd: dir, service: 'shop', log: () => undefined });
+  await runInit({ cwd: dir, service: 'shop', interactive: false, env: {}, log: () => undefined });
   assert.equal(fs.readFileSync(path.join(dir, 'decoy.config.ts'), 'utf8'), '// mine');
 });

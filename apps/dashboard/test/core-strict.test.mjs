@@ -25,6 +25,7 @@ const READS = [
   ["audit", () => api.audit()],
   ["settings", () => api.settings()],
   ["onboarding", () => api.onboarding()],
+  ["sampleStatus", () => api.sampleStatus()],
   ["system", () => api.system()],
   ["iocs", () => api.iocs(undefined, "inc_7")],
 ];
@@ -36,6 +37,9 @@ const MUTATIONS = [
   ["addBlock", () => api.addBlock(undefined, { ip: "1.2.3.4" })],
   ["unblock", () => api.unblock(undefined, "b1")],
   ["replay", () => api.replay()],
+  ["testHit", () => api.testHit()],
+  ["loadSample", () => api.loadSample()],
+  ["clearSample", () => api.clearSample()],
   ["retryJob", () => api.retryJob("j1")],
   ["bulkResolveNoise", () => api.bulkResolveNoise(["i1"])],
 ];

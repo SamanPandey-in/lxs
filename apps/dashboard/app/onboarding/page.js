@@ -1,7 +1,7 @@
 "use client";
-import { Check, Loader2, Play, RotateCcw } from "lucide-react";
+import { Check, Crosshair, Loader2, RotateCcw } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -12,9 +12,18 @@ import {
   Skeleton,
 } from "@/components/ui";
 import { api, PROJECT } from "@/lib/core";
+import {
+  announceSampleChange,
+  SAMPLE_CHANGED,
+  shouldOfferSample,
+  testHitPhase,
+  waitForTestIncident,
+} from "@/lib/first-run";
 import { useAsync, useDemo } from "@/lib/hooks";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
+import { SampleOffer } from "./sample-offer";
+import { TestHitCard } from "./test-hit";
 
 // Per-step command, one-sentence note and the place to go next.
 const STEPS = {
@@ -24,8 +33,7 @@ const STEPS = {
     action: { href: "/settings", label: "Open settings" },
   },
   key: {
-    code: "npx lxs keys create --name prod-sensors",
-    note: "The key is shown once. Keys are write-only, so a leak can't read your incidents.",
+    note: "The key is shown once; `npx lxs init` asks for it. Keys are write-only, so a leak can't read your incidents.",
     action: { href: "/settings", label: "Create a key in settings" },
   },
   sdk: { code: "npm i lxs", note: "Then add the one-line middleware to your app." },
@@ -41,8 +49,8 @@ const STEPS = {
     waiting: "Waiting for sensor",
   },
   agent: {
-    code: "npx lxs init\ndocker compose -f lxs/docker-compose.yml up -d",
-    note: "Starts the decoys and the agent. The agent registers itself on its first heartbeat.",
+    code: "npx lxs init --preset shop\nnpx lxs build\nnpx lxs doctor\ndocker compose -f docker-compose.yml -f lxs.compose.yml up -d",
+    note: "init writes decoy.config.ts and .env.lxs (it asks for the key), doctor checks Docker, ports and the key. The agent registers itself on its first heartbeat.",
     action: { href: "/system", label: "Open platform health" },
     waiting: "Waiting for agent",
   },
@@ -58,7 +66,7 @@ const STEPS = {
   },
   event: {
     code: "curl -i http://localhost:8081/admin",
-    note: 'Touch any decoy, or press "Run simulation". The event shows on the live feed in under a second.',
+    note: 'Touch any decoy, or press "Trigger a safe test hit". The event shows on the live feed in under a second.',
     action: { href: "/feed", label: "Open live feed" },
     waiting: "Waiting for first event",
   },
@@ -106,12 +114,24 @@ export default function OnboardingPage() {
   const demo = useDemo();
   const { data, error, reload } = useAsync(() => api.onboarding(PROJECT), []);
   const [steps, setSteps] = useState(null);
-  const [running, setRunning] = useState(false);
-  const [sim, setSim] = useState(false);
+  const sample = useAsync(() => api.sampleStatus(PROJECT), []);
+  const [hit, setHit] = useState({ sending: false, result: null, incident: null, elapsedMs: 0 });
+  const [hitEnd, setHitEnd] = useState(null); // null | "timeout" | error message
+  const [loadingSample, setLoadingSample] = useState(false);
+  const watch = useRef(null);
 
   useEffect(() => {
     if (data) setSteps(data.steps || []);
   }, [data]);
+  useEffect(() => () => watch.current?.abort(), []);
+  // The shell banner can clear sample data; offer it again afterwards.
+  const reloadSample = useRef(sample.reload);
+  reloadSample.current = sample.reload;
+  useEffect(() => {
+    const on = () => reloadSample.current();
+    window.addEventListener(SAMPLE_CHANGED, on);
+    return () => window.removeEventListener(SAMPLE_CHANGED, on);
+  }, []);
 
   const total = steps?.length ?? 0;
   const doneCount = steps ? steps.filter((s) => s.done).length : 0;
@@ -119,27 +139,69 @@ export default function OnboardingPage() {
   const next = firstOpen >= 0 ? steps[firstOpen] : null;
   const complete = Boolean(steps) && total > 0 && !next;
 
-  const simulate = async () => {
-    setRunning(true);
+  const testHit = async () => {
+    watch.current?.abort();
+    const ctrl = new AbortController();
+    watch.current = ctrl;
+    setHitEnd(null);
+    setHit({ sending: true, result: null, incident: null, elapsedMs: 0 });
+    let result;
     try {
-      await api.replay(PROJECT, { scenario: "ps-use-case" });
+      result = await api.testHit(PROJECT);
+    } catch (e) {
+      setHit({ sending: false, result: null, incident: null, elapsedMs: 0 });
+      toast("Could not send the test hit", "error", e.message);
+      return;
+    }
+    setHit({ sending: false, result, incident: null, elapsedMs: 0 });
+    reload();
+    const incident = await waitForTestIncident({
+      srcIp: result.src_ip,
+      fetchIncidents: () => api.incidents(PROJECT, "?limit=50"),
+      signal: ctrl.signal,
+      onTick: ({ elapsedMs }) => {
+        if (!ctrl.signal.aborted) setHit((h) => ({ ...h, elapsedMs }));
+      },
+    });
+    if (ctrl.signal.aborted) return;
+    if (incident) {
+      setHit((h) => ({ ...h, incident }));
+      toast(`Incident #${incident.number} opened`, "success", "Your test hit went end to end.");
+      reload();
+    } else setHitEnd("timeout");
+  };
+
+  const loadSample = async () => {
+    setLoadingSample(true);
+    try {
+      await api.loadSample(PROJECT);
       toast(
-        "Simulation running",
+        "Sample data loading",
         "success",
-        "Replaying SSH decoy → brute force → real Payments API.",
+        'Incidents appear in a few seconds, badged "Sample data".',
       );
-      setSim(true);
+      announceSampleChange();
+      sample.reload();
       reload();
     } catch (e) {
-      toast("Could not start simulation", "error", e.message);
+      toast("Could not load sample data", "error", e.message);
     } finally {
-      setRunning(false);
+      setLoadingSample(false);
     }
   };
 
+  const hitPhase =
+    hitEnd === "timeout"
+      ? "timeout"
+      : testHitPhase({
+          sending: hit.sending,
+          sent: Boolean(hit.result),
+          incident: hit.incident,
+          elapsedMs: hit.elapsedMs,
+        });
+
   const reset = () => {
     setSteps((cur) => cur.map((s, i) => (i >= 4 ? { ...s, done: false } : s)));
-    setSim(false);
     toast('Reset to "waiting for sensor" for the demo', "info");
   };
 
@@ -154,7 +216,7 @@ export default function OnboardingPage() {
   const header = (
     <PageHeader
       title="Get started"
-      purpose="From zero to your first event in under 10 minutes. Each step ticks itself from real events. No sensor yet? Run the simulation."
+      purpose="From zero to your first incident in under 10 minutes. Each step ticks itself from real events. No sensor yet? Trigger a safe test hit to see the whole path."
       actions={
         <>
           {demo ? (
@@ -162,8 +224,8 @@ export default function OnboardingPage() {
               <RotateCcw aria-hidden /> Reset checklist
             </Button>
           ) : null}
-          <Button onClick={simulate} loading={running}>
-            {running ? null : <Play aria-hidden />} Run simulation
+          <Button onClick={testHit} loading={hit.sending}>
+            {hit.sending ? null : <Crosshair aria-hidden />} Trigger a safe test hit
           </Button>
         </>
       }
@@ -183,6 +245,10 @@ export default function OnboardingPage() {
   return (
     <div className="mx-auto flex w-full max-w-[960px] min-w-0 flex-col gap-6">
       {header}
+
+      {hitPhase !== "idle" ? (
+        <TestHitCard phase={hitPhase} hit={hit.result} incident={hit.incident} />
+      ) : null}
 
       {!steps ? (
         <ChecklistSkeleton />
@@ -293,18 +359,8 @@ export default function OnboardingPage() {
         </Card>
       )}
 
-      {sim ? (
-        <p role="status" className="m-0 text-sm text-muted-foreground">
-          Simulation sent. Watch it on the{" "}
-          <Link href="/feed" className="font-medium text-link hover:underline">
-            live feed
-          </Link>{" "}
-          or in the{" "}
-          <Link href="/incidents" className="font-medium text-link hover:underline">
-            incident queue
-          </Link>
-          .
-        </p>
+      {!demo && shouldOfferSample(sample.data) ? (
+        <SampleOffer onLoad={loadSample} busy={loadingSample} />
       ) : null}
     </div>
   );

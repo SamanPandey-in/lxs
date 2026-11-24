@@ -1,6 +1,6 @@
 import type { IncidentSummary } from '@lxs/schema';
 import { sql } from 'drizzle-orm';
-import { aiSummaries, attackers, incidents } from '../db/schema.js';
+import { aiSummaries, attackers, events, incidents } from '../db/schema.js';
 
 export const iso = (d: Date | string | null | undefined): string | null =>
   d == null ? null : (d instanceof Date ? d : new Date(d)).toISOString();
@@ -39,11 +39,20 @@ export const incidentSummaryCols = {
   >`(select s.output->>'headline' from ${aiSummaries} s where s.incident_id = ${incidents.id} and coalesce(s.output->>'assessment', 'false') <> 'true' order by s.created_at desc limit 1)`.as(
     'ai_headline',
   ),
+  // Replayed (test hit / sample) incidents are labelled in the UI; events_incident_idx keeps these cheap.
+  simulated:
+    sql<boolean>`exists(select 1 from ${events} e where e.incident_id = ${incidents.id} and e.simulated)`.as(
+      'simulated',
+    ),
+  sample:
+    sql<boolean>`exists(select 1 from ${events} e where e.incident_id = ${incidents.id} and e.sample)`.as(
+      'sample',
+    ),
 };
 
 export type IncidentRow = {
   [K in keyof typeof summaryCols]: (typeof summaryCols)[K]['_']['data'];
-} & { aiHeadline: string | null };
+} & { aiHeadline: string | null; simulated?: boolean | null; sample?: boolean | null };
 
 export function toIncidentSummary(r: IncidentRow): IncidentSummary {
   return {
@@ -64,6 +73,8 @@ export function toIncidentSummary(r: IncidentRow): IncidentSummary {
     last_event_at: iso(r.lastEventAt)!,
     ai_status: r.aiStatus as IncidentSummary['ai_status'],
     ai_headline: r.aiHeadline,
+    simulated: r.simulated === true,
+    sample: r.sample === true,
   };
 }
 

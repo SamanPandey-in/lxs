@@ -39,6 +39,7 @@ import { setMe } from "../lib/identity";
 import { isActive, NAV, NAV_ITEMS } from "../lib/nav";
 import { useStore } from "../lib/store";
 import { CommandPalette, Kbd, useModKeyLabel, usePaletteShortcut } from "./command-palette";
+import { SampleDataBanner } from "./sample-data-banner";
 import { PageSkeleton } from "./ui";
 import { VerifyEmailBanner } from "./verify-email-banner";
 
@@ -230,6 +231,7 @@ function AppShell({ children, path }) {
           </header>
           {ready ? <StatusBanner /> : null}
           {session === "authenticated" ? <VerifyEmailBanner /> : null}
+          {session === "authenticated" ? <SampleDataBanner /> : null}
           <main
             id="main"
             tabIndex={-1}

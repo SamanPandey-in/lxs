@@ -312,6 +312,8 @@ export const events = pgTable(
     raw: jsonb('raw'),
     count: integer('count').notNull().default(1),
     simulated: boolean('simulated').notNull().default(false),
+    /** Canned onboarding sample data (a subset of `simulated`); removable with DELETE …/demo/sample-data. */
+    sample: boolean('sample').notNull().default(false),
     attackerId: uuid('attacker_id').references(() => attackers.id, { onDelete: 'set null' }),
     incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'set null' }),
     tags: text('tags').array().notNull().default(sql`'{}'::text[]`),
@@ -325,6 +327,7 @@ export const events = pgTable(
     index('events_project_src_idx').on(t.projectId, t.srcIp, t.occurredAt.desc()),
     index('events_incident_idx').on(t.incidentId, t.occurredAt),
     index('events_unprocessed_idx').on(t.id).where(sql`${t.processedAt} is null`),
+    index('events_project_sample_idx').on(t.projectId).where(sql`${t.sample}`),
   ],
 );
 

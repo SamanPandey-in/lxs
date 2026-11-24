@@ -1,0 +1,2 @@
+ALTER TABLE "events" ADD COLUMN "sample" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+CREATE INDEX "events_project_sample_idx" ON "events" USING btree ("project_id") WHERE "events"."sample";
