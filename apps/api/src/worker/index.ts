@@ -1,12 +1,15 @@
 import type { FastifyBaseLogger } from 'fastify';
 import {
   type AssessIncidentJob,
+  digestCron,
+  type ExportProjectJob,
   getBoss,
   type NarrateIncidentJob,
   type NotifyIncidentJob,
   type ProcessEventsJob,
   QUEUES,
   setInProcessAssessor,
+  setInProcessExporter,
   setInProcessNarrator,
   setInProcessNotifier,
   setInProcessProcessor,
@@ -14,10 +17,18 @@ import {
 import { timeJob } from '../plugins/metrics.js';
 import { assessIncident } from './assess-incident.js';
 import { loadDetection } from './detection.js';
-import { autoCloseNoise, blocklistExpiry, retentionPurge, sensorStaleness } from './maintenance.js';
+import { exportProject } from './export-project.js';
+import {
+  autoCloseNoise,
+  blocklistExpiry,
+  dailyDataMaintenance,
+  exportCleanup,
+  sensorStaleness,
+} from './maintenance.js';
 import { llmConfig, narrateIncident } from './narrator.js';
 import { notifyIncident } from './notify-incident.js';
 import { processEvents } from './process-events.js';
+import { weeklyDigest } from './weekly-digest.js';
 
 const timers: NodeJS.Timeout[] = [];
 
@@ -29,6 +40,7 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
   setInProcessNarrator(narrateIncident);
   setInProcessAssessor(assessIncident);
   setInProcessNotifier(notifyIncident);
+  setInProcessExporter((id) => exportProject(id));
   log.info(
     llmConfig
       ? `worker: LLM narrator on (${llmConfig.provider}, ${llmConfig.model})`
@@ -69,6 +81,12 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
           notifyIncident((j as { data: NotifyIncidentJob }).data.incidentId),
         );
     });
+    await boss.work<ExportProjectJob>(QUEUES.exportProject, async (jobs) => {
+      for (const j of Array.isArray(jobs) ? jobs : [jobs])
+        await timeJob(QUEUES.exportProject, () =>
+          exportProject((j as { data: ExportProjectJob }).data.exportId),
+        );
+    });
     const cron = async (queue: string, expr: string, fn: () => Promise<unknown>) => {
       await boss.schedule(queue, expr);
       await boss.work(queue, async () => {
@@ -77,8 +95,15 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
     };
     await cron(QUEUES.sweep, '* * * * *', () => processEvents({}));
     await cron(QUEUES.blocklistExpiry, '* * * * *', blocklistExpiry);
-    await cron(QUEUES.autoCloseNoise, '0 * * * *', autoCloseNoise);
-    await cron(QUEUES.retentionPurge, '0 3 * * *', retentionPurge);
+    await cron(QUEUES.autoCloseNoise, '0 * * * *', async () => {
+      await autoCloseNoise();
+      await exportCleanup();
+    });
+    // Retention, credential hashing, project hard-delete and export expiry (data handling).
+    await cron(QUEUES.retentionPurge, '0 3 * * *', dailyDataMaintenance);
+    const digest = digestCron();
+    if (digest) await cron(QUEUES.weeklyDigest, digest, () => weeklyDigest(new Date(), log));
+    else await boss.unschedule(QUEUES.weeklyDigest).catch(() => {});
     log.info('worker: pg-boss handlers registered');
   } else {
     // Degraded mode: plain timers (single instance only).
@@ -92,12 +117,33 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
     timers.push(setInterval(guard('auto-close-noise', autoCloseNoise), 3_600_000));
     timers.push(
       setInterval(
+        guard('export-cleanup', () => exportCleanup()),
+        3_600_000,
+      ),
+    );
+    timers.push(
+      setInterval(
         guard('retention-purge', async () =>
-          new Date().getUTCHours() === 3 ? retentionPurge() : undefined,
+          new Date().getUTCHours() === 3 ? dailyDataMaintenance() : undefined,
         ),
         3_600_000,
       ),
     );
+    // Digest: an hourly check (DIGEST_CRON is not parsed here). It reports the last complete
+    // week, so any hour from Monday 09:00 UTC on is right; the per-project, per-week claim in
+    // digest_runs turns the repeats into no-ops.
+    if (digestCron())
+      timers.push(
+        setInterval(
+          guard('weekly-digest', async () => {
+            const now = new Date();
+            return now.getUTCDay() === 1 && now.getUTCHours() < 9
+              ? undefined
+              : weeklyDigest(now, log);
+          }),
+          3_600_000,
+        ),
+      );
     log.warn('worker: running in degraded timer mode (no pg-boss)');
   }
   timers.push(setInterval(guard('sensor-staleness', sensorStaleness), 30_000));

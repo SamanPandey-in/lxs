@@ -35,7 +35,13 @@ export async function systemRoutes(app: FastifyInstance): Promise<void> {
       .select({ id: projects.id })
       .from(projects)
       .innerJoin(memberships, eq(memberships.orgId, projects.orgId))
-      .where(and(eq(memberships.userId, req.user!.id), eq(memberships.role, 'owner')));
+      .where(
+        and(
+          eq(memberships.userId, req.user!.id),
+          eq(memberships.role, 'owner'),
+          isNull(projects.deletedAt),
+        ),
+      );
     const projectIds = projectRows.map((p) => p.id);
     const [unprocessed, eventCount, incidentCount, sensorCount] = projectIds.length
       ? await Promise.all([

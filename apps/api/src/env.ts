@@ -7,6 +7,8 @@ const bool = z
 
 /** Dev-only fallback; refused in production. Not 32 bytes of key material by itself: see parseEncryptionKey. */
 export const DEV_ENCRYPTION_KEY = 'dev-only-encryption-key-change-me';
+/** Dev-only credential pepper; refused in production. */
+export const DEV_CREDENTIAL_PEPPER = 'dev-only-credential-pepper-change-me';
 
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -79,6 +81,24 @@ const EnvSchema = z.object({
   SIGNUP_RATE_PER_HOUR: z.coerce.number().int().positive().default(10),
   // Bearer token for GET /metrics. Unset: open in dev/test, disabled (404) in production.
   METRICS_TOKEN: z.string().min(16).optional(),
+  // Weekly digest schedule (pg-boss cron, UTC). Default Monday 09:00. "off" disables it.
+  DIGEST_CRON: z.string().min(1).default('0 9 * * 1'),
+  // Data handling (H5/G11). Retention for the `free` plan (lib/plans.ts); other plans are fixed.
+  RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  RAW_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(7),
+  // Project exports: where finished bundles live and how long they can be downloaded.
+  EXPORT_STORAGE: z.enum(['local', 's3']).default('local'),
+  EXPORT_DIR: z.string().min(1).default('./var/exports'),
+  EXPORT_S3_BUCKET: z.string().optional(),
+  EXPORT_S3_PREFIX: z.string().default('exports/'),
+  EXPORT_TTL_HOURS: z.coerce.number().int().positive().default(24),
+  // Soft-deleted projects are purged for good after this many days (restorable until then).
+  PROJECT_DELETE_GRACE_DAYS: z.coerce.number().int().min(0).max(90).default(7),
+  // Attacker-typed passwords are replaced by a peppered hash after this many days. At least 2,
+  // so hashing never touches events the correlator can still read back (24 h lookback).
+  CREDENTIAL_HASH_DAYS: z.coerce.number().int().min(2).max(3650).default(30),
+  // Per-deployment secret mixed into captured-credential hashes. Required in production.
+  CREDENTIAL_PEPPER: z.string().min(16).default(DEV_CREDENTIAL_PEPPER),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
@@ -113,6 +133,15 @@ function load(): Env {
   }
   if (env.ENCRYPTION_KEY !== DEV_ENCRYPTION_KEY && !decodeKey32(env.ENCRYPTION_KEY)) {
     console.error('ENCRYPTION_KEY must decode to exactly 32 bytes (base64 or 64 hex chars)');
+    process.exit(1);
+  }
+  if (env.NODE_ENV === 'production' && env.CREDENTIAL_PEPPER === DEV_CREDENTIAL_PEPPER) {
+    console.error('CREDENTIAL_PEPPER must be set in production (at least 16 characters)');
+    process.exit(1);
+  }
+  if (env.EXPORT_STORAGE === 's3') {
+    // The S3 adapter is a stub (worker/export-project.ts); refuse rather than fail per export.
+    console.error('EXPORT_STORAGE=s3 is not implemented yet; use EXPORT_STORAGE=local');
     process.exit(1);
   }
   if (env.NODE_ENV === 'production' && env.NOTIFY_ALLOW_PRIVATE) {

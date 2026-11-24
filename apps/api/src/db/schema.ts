@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   customType,
   index,
@@ -35,6 +36,8 @@ export const users = pgTable(
     // Null until the address is confirmed. Unverified users can sign in and look
     // around, but cannot create ingest keys or invite members.
     emailVerifiedAt: ts('email_verified_at'),
+    /** Weekly digest email opt-out (Settings toggle or the signed unsubscribe link). */
+    digestOptOut: boolean('digest_opt_out').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [
@@ -53,6 +56,12 @@ export const organizations = pgTable(
     // Admin kill switch (src/db/org-kill-switch.ts): blocks login and ingest for the org.
     disabledAt: ts('disabled_at'),
     disabledReason: text('disabled_reason'),
+    // Data handling: retention and caps come from this plan (lib/plans.ts). No billing.
+    plan: text('plan').notNull().default('free'), // free | team | custom
+    // Set when the last member deleted their account; purged with its projects after the grace.
+    deletedAt: ts('deleted_at'),
+    // Per-org LLM calls per UTC day. Null: LLM_ORG_DAILY_CAP (lib/llm-budget.ts).
+    llmDailyCap: integer('llm_daily_cap'),
   },
   (t) => [uniqueIndex('organizations_slug_uq').on(t.slug)],
 );
@@ -134,10 +143,46 @@ export const projects = pgTable(
     retentionDays: integer('retention_days').notNull().default(30),
     aiEnabled: boolean('ai_enabled').notNull().default(true),
     aiDailyCap: integer('ai_daily_cap').notNull().default(200),
+    /** Last time an owner confirmed the allowlist is still right (coverage check). */
+    allowlistReviewedAt: ts('allowlist_reviewed_at'),
     createdAt: createdAt(),
     archivedAt: ts('archived_at'),
+    // Soft delete (modules/data.ts): hidden everywhere and ingest refused at once; the
+    // maintenance job purges the row and everything under it after `purge_after`.
+    deletedAt: ts('deleted_at'),
+    deletedBy: text('deleted_by'),
+    purgeAfter: ts('purge_after'),
   },
-  (t) => [uniqueIndex('projects_org_slug_uq').on(t.orgId, t.slug)],
+  (t) => [
+    uniqueIndex('projects_org_slug_uq').on(t.orgId, t.slug),
+    index('projects_purge_idx').on(t.purgeAfter).where(sql`${t.deletedAt} is not null`),
+  ],
+);
+
+/** Async project exports (worker/export-project.ts). The bundle itself lives in EXPORT_STORAGE. */
+export const projectExports = pgTable(
+  'project_exports',
+  {
+    id: pk(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    requestedBy: text('requested_by'),
+    status: text('status').notNull().default('pending'), // pending | running | ready | failed | expired
+    storage: text('storage').notNull().default('local'), // local | s3
+    objectKey: text('object_key'),
+    sizeBytes: bigint('size_bytes', { mode: 'number' }),
+    rowCounts: jsonb('row_counts').notNull().default(sql`'{}'::jsonb`),
+    error: text('error'),
+    createdAt: createdAt(),
+    startedAt: ts('started_at'),
+    completedAt: ts('completed_at'),
+    expiresAt: ts('expires_at'),
+  },
+  (t) => [index('project_exports_project_idx').on(t.projectId, t.createdAt.desc())],
 );
 
 export const apiKeys = pgTable(
@@ -328,6 +373,13 @@ export const events = pgTable(
     index('events_incident_idx').on(t.incidentId, t.occurredAt),
     index('events_unprocessed_idx').on(t.id).where(sql`${t.processedAt} is null`),
     index('events_project_sample_idx').on(t.projectId).where(sql`${t.sample}`),
+    // Events still holding an attacker-typed password (clear, masked or salted) that the
+    // credential-hashing job has not rewritten yet. Same predicate as worker/maintenance.ts.
+    index('events_unhashed_creds_idx')
+      .on(t.receivedAt)
+      .where(
+        sql`${t.fields} ?| array['password_clear','password_masked','password_sha256'] or ${t.raw} ? 'password'`,
+      ),
   ],
 );
 
@@ -464,6 +516,8 @@ export const notificationChannels = pgTable(
     lastStatus: text('last_status'), // null (never sent) | ok | failed
     lastError: text('last_error'),
     lastDeliveredAt: ts('last_delivered_at'),
+    /** Opt-in: also post the weekly digest to this channel. */
+    digest: boolean('digest').notNull().default(false),
     createdAt: createdAt(),
   },
   (t) => [index('notification_channels_project_idx').on(t.projectId)],
@@ -531,4 +585,40 @@ export const auditLogs = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index('audit_logs_project_idx').on(t.projectId, t.createdAt.desc())],
+);
+
+/** One row per project per ISO week: the dedupe claim and the record of what a digest said. */
+export const digestRuns = pgTable(
+  'digest_runs',
+  {
+    id: pk(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    week: text('week').notNull(), // ISO week of the reported period, e.g. 2026-W47
+    periodStart: ts('period_start').notNull(),
+    periodEnd: ts('period_end').notNull(),
+    summary: jsonb('summary').notNull().default(sql`'{}'::jsonb`),
+    emailsSent: integer('emails_sent').notNull().default(0),
+    emailsFailed: integer('emails_failed').notNull().default(0),
+    channelsSent: integer('channels_sent').notNull().default(0),
+    channelsFailed: integer('channels_failed').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('digest_runs_project_week_uq').on(t.projectId, t.week)],
+);
+
+/** Milestones a project has reached. Recorded once; `reached_at` comes from the data itself. */
+export const projectMilestones = pgTable(
+  'project_milestones',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    key: text('key').notNull(),
+    reachedAt: ts('reached_at').notNull(),
+    detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
+    recordedAt: ts('recorded_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.key] })],
 );

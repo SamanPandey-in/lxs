@@ -65,6 +65,7 @@ const PUBLIC = new Set([
   "/forgot-password",
   "/reset-password",
   "/verify-email",
+  "/digest/unsubscribe",
 ]);
 const isPublic = (path) => PUBLIC.has(path) || path?.startsWith("/invite/");
 const OPEN = new Set(["open", "acknowledged"]);

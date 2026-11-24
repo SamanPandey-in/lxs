@@ -54,6 +54,8 @@ export const channelsApi = {
   /** Returns the channel; generic webhooks also carry `signing_secret` (shown once). */
   create: async (body) => request(await base(), { method: "POST", body }),
   remove: async (id) => request(`${await base()}/${e(id)}`, { method: "DELETE" }),
+  /** Change flags on a channel: `{ digest }` (weekly digest opt-in) and/or `{ enabled }`. */
+  update: async (id, body) => request(`${await base()}/${e(id)}`, { method: "PATCH", body }),
   /** { delivered, status, error } from a real test message. */
   test: async (id) => request(`${await base()}/${e(id)}/test`, { method: "POST" }),
 };

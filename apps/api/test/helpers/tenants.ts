@@ -29,6 +29,7 @@ export interface Tenant {
   channel: string;
   invite: string;
   inviteToken: string;
+  export: string; // project_exports row id
 }
 
 function seedTenant(fake: FakeDb, name: 'a' | 'b'): Tenant {
@@ -45,6 +46,7 @@ function seedTenant(fake: FakeDb, name: 'a' | 'b'): Tenant {
     channel: randomUUID(),
     invite: '',
     inviteToken: '',
+    export: randomUUID(),
   };
   const now = new Date();
   fake.table('organizations').push({
@@ -104,6 +106,18 @@ function seedTenant(fake: FakeDb, name: 'a' | 'b'): Tenant {
     revoked_at: null,
   });
   fake.table('blocklist_entries').push({ id: t.block, project_id: t.project, created_at: now });
+  fake.table('project_exports').push({
+    id: t.export,
+    project_id: t.project,
+    org_id: t.org,
+    requested_by: t.owner,
+    status: 'failed',
+    storage: 'local',
+    object_key: null,
+    row_counts: {},
+    error: 'seeded',
+    created_at: new Date(now.getTime() - 2 * 86_400_000),
+  });
   fake
     .table('notification_channels')
     .push({ id: t.channel, project_id: t.project, created_at: now });
@@ -169,7 +183,15 @@ export async function buildWorld(): Promise<World> {
   fake.defaults = {
     users: { session_version: 0, name: '', email_verified_at: null },
     memberships: { role: 'owner' },
-    projects: { environment: 'production', archived_at: null, ai_enabled: true },
+    projects: {
+      environment: 'production',
+      archived_at: null,
+      ai_enabled: true,
+      deleted_at: null,
+      purge_after: null,
+    },
+    organizations: { plan: 'free', deleted_at: null },
+    project_exports: { status: 'pending', row_counts: {}, error: null, expires_at: null },
     api_keys: { scopes: ['ingest'], revoked_at: null },
   };
   // Raw SQL the generic engine cannot read: answer what the identity routes need.
@@ -186,7 +208,10 @@ export async function buildWorld(): Promise<World> {
     {
       match: /count\(\*\)::int AS n FROM projects/,
       rows: (p, f) => [
-        { n: f.table('projects').filter((r) => r.org_id === p[0] && !r.archived_at).length },
+        {
+          n: f.table('projects').filter((r) => r.org_id === p[0] && !r.archived_at && !r.deleted_at)
+            .length,
+        },
       ],
     },
     {

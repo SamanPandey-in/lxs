@@ -208,7 +208,12 @@ export async function projectAccess(
 ): Promise<ProjectAccess> {
   if (!req.user) throw unauthorized();
   if (!isUuid(projectId)) throw notFound('Project');
-  const [p] = await db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
+  // Soft-deleted projects are gone for every route; only restore (modules/data.ts) sees them.
+  const [p] = await db
+    .select()
+    .from(projects)
+    .where(and(eq(projects.id, projectId), isNull(projects.deletedAt)))
+    .limit(1);
   if (!p) throw notFound('Project');
   const m = await membershipInOrg(req.user.id, p.orgId);
   if (!m) throw notFound('Project');

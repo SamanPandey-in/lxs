@@ -41,6 +41,7 @@ import {
 } from "@/components/ui";
 import { BlockModal, describeEvent, RelativeTime, UnblockModal } from "@/components/workspace";
 import { api, PROJECT } from "@/lib/core";
+import { passwordText } from "@/lib/data";
 import { replayBadge } from "@/lib/first-run";
 import { usePolling } from "@/lib/hooks";
 import { EVENT_LABEL, ruleName, SEVERITY, STAGE_LABEL } from "@/lib/labels";
@@ -121,7 +122,7 @@ function Timeline({ events, triggerMap }) {
         const last = g.items[g.items.length - 1].e;
         const multi = g.items.length > 1;
         const value = multi
-          ? g.items.map((i) => `${i.e.fields.username}/${i.e.fields.password_masked}`).join("  ")
+          ? g.items.map((i) => `${i.e.fields.username}/${passwordText(i.e.fields)}`).join("  ")
           : describeEvent(first);
         return (
           <li
@@ -354,7 +355,7 @@ function Evidence({ inc, attacker, events }) {
     .filter((e) => e.event_type === "auth.attempt")
     .map((e) => ({
       k: e.id,
-      text: `${e.fields.username} / ${e.fields.password_masked ?? "•••"}`,
+      text: `${e.fields.username} / ${passwordText(e.fields)}`,
       ok: e.outcome === "success",
       n: e.count,
     }));

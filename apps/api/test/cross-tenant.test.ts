@@ -29,6 +29,10 @@ const NOT_TENANT_SCOPED: Record<string, string> = {
   'POST /v1/auth/password/forgot': 'public; always the same answer',
   'POST /v1/auth/password/reset': 'public; the token is the credential',
   'GET /v1/me': 'returns the caller only',
+  'GET /v1/me/digest': 'the caller’s own digest preference',
+  'PATCH /v1/me/digest': 'acts on the caller only',
+  'POST /v1/digest/unsubscribe': 'public; the signed token is the credential',
+  'DELETE /v1/me': 'deletes the caller only (password confirm)',
   'GET /v1/system': 'aggregates over the caller’s owned projects only',
   'GET /v1/projects': 'lists the caller’s memberships only',
   'POST /v1/projects': 'creates in an org the caller owns',
@@ -61,6 +65,7 @@ function fill(url: string, w: World): string {
     cid: a.channel,
     oid: a.org,
     uid: a.owner,
+    eid: a.export,
     iid: url.startsWith('/v1/orgs/') ? a.invite : a.incident,
   };
   const path = url.replace(/:(\w+)/g, (_, p: string) => {
@@ -84,6 +89,7 @@ function aIds(w: World): string[] {
     a.block,
     a.channel,
     a.invite,
+    a.export,
   ];
 }
 
@@ -247,5 +253,89 @@ describe('cross-tenant isolation', () => {
     assert.ok(
       !w.fake.table('memberships').some((m) => m.org_id === w.a.org && m.user_id === w.b.owner),
     );
+  });
+
+  /* ---------------- soft-deleted projects (data handling, H5) ---------------- */
+
+  const json = (cookie: string, method: string, url: string, body?: unknown) =>
+    w.app.inject({
+      method: method as 'GET',
+      url,
+      headers: {
+        cookie,
+        origin: ORIGIN,
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { payload: JSON.stringify(body) }),
+    });
+
+  it('tenant B cannot delete tenant A’s project, even with the right slug', async () => {
+    const res = await json(w.cookie(w.b.owner), 'DELETE', `/v1/projects/${w.a.project}`, {
+      confirm: 'project-a',
+    });
+    assert.equal(res.statusCode, 404);
+    assert.ok(!w.fake.table('projects').find((p) => p.id === w.a.project)!.deleted_at);
+  });
+
+  it('once A deletes its project, every project route answers 404 to A as well', async () => {
+    const del = await json(w.cookie(w.a.owner), 'DELETE', `/v1/projects/${w.a.project}`, {
+      confirm: 'project-a',
+    });
+    assert.equal(del.statusCode, 200, del.body);
+    const routes = listRoutes(w.app).filter(
+      (r) =>
+        (r.url.includes('/:') || QUERY_SCOPED.has(`${r.method} ${r.url}`)) &&
+        !r.url.startsWith('/v1/orgs/') &&
+        r.url !== '/v1/projects/:pid/restore',
+    );
+    const open: string[] = [];
+    for (const r of routes) {
+      const res = await w.app.inject({
+        method: r.method as 'GET',
+        url: fill(r.url, w),
+        headers: {
+          cookie: w.cookie(w.a.owner),
+          origin: ORIGIN,
+          ...(r.method === 'GET' ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(r.method === 'GET' ? {} : { payload: '{}' }),
+      });
+      if (res.statusCode !== 404) open.push(`${r.method} ${r.url} -> ${res.statusCode}`);
+    }
+    assert.deepEqual(open, []);
+    const list = await json(w.cookie(w.a.owner), 'GET', '/v1/projects');
+    assert.ok(!list.body.includes(w.a.project), 'deleted project still listed');
+  });
+
+  it('a deleted project’s ingest key is refused', async () => {
+    const res = await w.app.inject({
+      method: 'GET',
+      url: '/v1/agent/whoami',
+      headers: { authorization: `Bearer ${w.a.ingestKey}` },
+    });
+    assert.equal(res.statusCode, 403);
+  });
+
+  it('tenant B can neither list nor restore tenant A’s deleted project', async () => {
+    const list = await json(w.cookie(w.b.owner), 'GET', `/v1/orgs/${w.a.org}/deleted-projects`);
+    assert.equal(list.statusCode, 404);
+    const own = await json(w.cookie(w.b.owner), 'GET', `/v1/orgs/${w.b.org}/deleted-projects`);
+    assert.equal(own.statusCode, 200);
+    assert.ok(!own.body.includes(w.a.project));
+    const restore = await json(
+      w.cookie(w.b.owner),
+      'POST',
+      `/v1/projects/${w.a.project}/restore`,
+      {},
+    );
+    assert.equal(restore.statusCode, 404);
+    assert.ok(w.fake.table('projects').find((p) => p.id === w.a.project)!.deleted_at);
+  });
+
+  it('A restores its project inside the grace period and can reach it again', async () => {
+    const res = await json(w.cookie(w.a.owner), 'POST', `/v1/projects/${w.a.project}/restore`, {});
+    assert.equal(res.statusCode, 200, res.body);
+    const get = await json(w.cookie(w.a.owner), 'GET', `/v1/projects/${w.a.project}`);
+    assert.equal(get.statusCode, 200);
   });
 });

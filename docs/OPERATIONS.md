@@ -26,6 +26,7 @@ from the task definition.
 | `POSTGRES_PASSWORD` | compose only | Password for the bundled Postgres container | As above |
 | `SESSION_SECRET` | yes (prod refuses the default) | Signs session cookies, ≥16 chars | Rotating logs every user out; do it on leak |
 | `ENCRYPTION_KEY` | yes (prod refuses the default) | 32 bytes (base64 or 64 hex). Encrypts notification channel URLs and signing secrets | **Back it up separately from the DB dumps.** Without it, restored channel URLs cannot be decrypted. Rotate with `pnpm --filter @lxs/api db:reencrypt-channels` |
+| `CREDENTIAL_PEPPER` | yes (prod refuses the default) | ≥16 chars; pepper for captured-password hashes after `CREDENTIAL_HASH_DAYS` (docs/DATA-HANDLING.md) | Keep it out of the DB backups. Rotating only means new hashes stop matching old ones |
 | `METRICS_TOKEN` | to expose `/metrics` in prod | Bearer token for the scraper, ≥16 chars | Rotate in `.env` and the Prometheus config |
 | `RESEND_API_KEY` | if `MAIL_TRANSPORT=resend` | Transactional mail (verification, resets, invites) | Revoke in Resend, issue a new one |
 | `SMTP_URL` | if `MAIL_TRANSPORT=smtp` | SMTP credentials | Rotate at the provider |

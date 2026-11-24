@@ -300,7 +300,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const [project] = await tx
           .select({ id: projects.id, name: projects.name, slug: projects.slug })
           .from(projects)
-          .where(eq(projects.orgId, invite.invite.orgId))
+          .where(and(eq(projects.orgId, invite.invite.orgId), isNull(projects.deletedAt)))
           .orderBy(asc(projects.createdAt))
           .limit(1);
         return { user: u!, project: project ?? null };

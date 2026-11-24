@@ -57,7 +57,12 @@ const Create = z.object({
   min_severity: z.enum(['low', 'medium', 'high', 'critical']).default('high'),
   labels: z.array(z.enum(['noise', 'opportunistic', 'targeted'])).default(['targeted']),
   enabled: z.boolean().default(true),
+  digest: z.boolean().default(false),
 });
+
+const Patch = z
+  .object({ digest: z.boolean().optional(), enabled: z.boolean().optional() })
+  .refine((b) => b.digest !== undefined || b.enabled !== undefined, 'Nothing to update');
 
 export async function notificationRoutes(app: FastifyInstance): Promise<void> {
   const auth = { preHandler: requireSession };
@@ -68,6 +73,7 @@ export async function notificationRoutes(app: FastifyInstance): Promise<void> {
     min_severity: c.minSeverity,
     labels: c.labels,
     enabled: c.enabled,
+    digest: c.digest,
     target: maskUrl(c.urlEncrypted),
     signed: !!c.secretEncrypted,
     last_status: c.lastStatus,
@@ -106,6 +112,7 @@ export async function notificationRoutes(app: FastifyInstance): Promise<void> {
         minSeverity: b.min_severity,
         labels: b.labels,
         enabled: b.enabled,
+        digest: b.digest,
       })
       .returning();
     await audit(db, {
@@ -120,6 +127,34 @@ export async function notificationRoutes(app: FastifyInstance): Promise<void> {
       req,
     });
     return reply.status(201).send(secret ? { ...view(c!), signing_secret: secret } : view(c!));
+  });
+
+  app.patch('/v1/projects/:pid/notification-channels/:cid', auth, async (req) => {
+    const { pid, cid } = req.params as { pid: string; cid: string };
+    const { project, user } = await projectAccess(req, pid, 'owner');
+    if (!isUuid(cid)) throw notFound('Channel');
+    const b = parse(Patch, req.body);
+    const [c] = await db
+      .update(notificationChannels)
+      .set({
+        ...(b.digest !== undefined && { digest: b.digest }),
+        ...(b.enabled !== undefined && { enabled: b.enabled }),
+      })
+      .where(and(eq(notificationChannels.id, cid), eq(notificationChannels.projectId, project.id)))
+      .returning();
+    if (!c) throw notFound('Channel');
+    await audit(db, {
+      orgId: project.orgId,
+      projectId: project.id,
+      actorType: 'user',
+      actorId: user.id,
+      action: 'channel.update',
+      targetType: 'notification_channel',
+      targetId: cid,
+      metadata: b,
+      req,
+    });
+    return view(c);
   });
 
   app.delete('/v1/projects/:pid/notification-channels/:cid', auth, async (req, reply) => {

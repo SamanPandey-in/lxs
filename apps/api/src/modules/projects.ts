@@ -13,11 +13,11 @@ import {
   organizations,
   projects,
 } from '../db/schema.js';
-import { env } from '../env.js';
 import { audit } from '../lib/audit.js';
 import { generateIngestKey } from '../lib/crypto.js';
-import { conflict, forbidden, HttpError, notFound } from '../lib/errors.js';
+import { conflict, forbidden, HttpError, invalid, notFound } from '../lib/errors.js';
 import { parse } from '../lib/parse.js';
+import { orgPlan } from '../lib/plans.js';
 import { type IncidentRow, incidentSummaryCols, iso, toIncidentSummary } from '../lib/serialize.js';
 import {
   isUuid,
@@ -152,7 +152,13 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       .from(projects)
       .innerJoin(memberships, eq(memberships.orgId, projects.orgId))
       .innerJoin(organizations, eq(organizations.id, projects.orgId))
-      .where(and(eq(memberships.userId, req.user!.id), isNull(organizations.disabledAt)))
+      .where(
+        and(
+          eq(memberships.userId, req.user!.id),
+          isNull(organizations.disabledAt),
+          isNull(projects.deletedAt),
+        ),
+      )
       .orderBy(asc(projects.createdAt));
     return { items: rows.map((r) => projectJson(r.p)) };
   });
@@ -164,17 +170,21 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
     if (!org) throw forbidden('Owner role required in an organization', 'insufficient_role');
     const slug = body.slug ? slugify(body.slug) : slugify(body.name);
     const [dupe] = await db
-      .select({ id: projects.id })
+      .select({ id: projects.id, deletedAt: projects.deletedAt })
       .from(projects)
       .where(and(eq(projects.orgId, org.id), eq(projects.slug, slug)))
       .limit(1);
+    if (dupe?.deletedAt)
+      throw conflict(
+        'A deleted project still holds this slug until it is purged. Restore it or pick another slug',
+      );
     if (dupe) throw conflict('A project with this slug already exists');
     const p = await db.transaction(async (tx) => {
       await lockOrg(tx, org.id);
       const [{ n }] = (await tx.execute(dsql`
-        SELECT count(*)::int AS n FROM projects WHERE org_id = ${org.id}::uuid AND archived_at IS NULL
+        SELECT count(*)::int AS n FROM projects WHERE org_id = ${org.id}::uuid AND archived_at IS NULL AND deleted_at IS NULL
       `)) as unknown as [{ n: number }];
-      assertUnderCap('projects', n, env.MAX_PROJECTS_PER_ORG);
+      assertUnderCap('projects', n, (await orgPlan(tx, org.id)).plan.maxProjects);
       const [row] = await tx
         .insert(projects)
         .values({
@@ -212,6 +222,14 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
       'owner',
     );
     const b = parse(PatchProject, req.body);
+    if (b.retention_days !== undefined) {
+      const { name, plan } = await orgPlan(db, project.orgId);
+      if (b.retention_days > plan.retentionDays)
+        throw invalid(`The ${name} plan keeps events for at most ${plan.retentionDays} days`, {
+          field: 'retention_days',
+          max: plan.retentionDays,
+        });
+    }
     const [p] = await db
       .update(projects)
       .set({
@@ -275,7 +293,7 @@ export async function projectRoutes(app: FastifyInstance): Promise<void> {
         SELECT count(*)::int AS n FROM api_keys k JOIN projects p ON p.id = k.project_id
         WHERE p.org_id = ${project.orgId}::uuid AND k.revoked_at IS NULL
       `)) as unknown as [{ n: number }];
-      assertUnderCap('keys', n, env.MAX_KEYS_PER_ORG);
+      assertUnderCap('keys', n, (await orgPlan(tx, project.orgId)).plan.maxKeys);
       const [inserted] = await tx
         .insert(apiKeys)
         .values({

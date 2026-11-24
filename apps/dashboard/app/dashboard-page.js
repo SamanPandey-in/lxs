@@ -16,6 +16,7 @@ import {
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { KillMini } from "@/components/killchain";
+import { RetentionOverview } from "@/components/retention/overview";
 import {
   Button,
   Card,
@@ -208,6 +209,8 @@ export default function Overview() {
           </div>
         </Card>
       )}
+
+      <RetentionOverview />
 
       {/* Secondary: context, not calls to action. */}
       <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-2">

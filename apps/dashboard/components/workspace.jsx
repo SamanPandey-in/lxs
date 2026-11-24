@@ -3,6 +3,7 @@ import { ShieldBan } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { activeProjectName, api, PROJECT } from "@/lib/core";
+import { credentialText } from "@/lib/data";
 import { EVENT_LABEL, eventTone } from "@/lib/labels";
 import { toast } from "@/lib/toast";
 import { clock, cn, stamp } from "@/lib/utils";
@@ -65,7 +66,7 @@ export function describeEvent(e) {
     case "http.request":
       return `${f.method || "GET"} ${f.url || e.dst_service}${f.status_code ? ` → ${f.status_code}` : ""}${e.count > 1 ? ` ×${e.count}` : ""}`;
     case "auth.attempt":
-      return `${f.username || "?"} / ${f.password_masked || "•••"} ${e.outcome === "success" ? "✔ accepted" : "✘ rejected"}${e.count > 1 ? ` ×${e.count}` : ""}`;
+      return `${credentialText(f)} ${e.outcome === "success" ? "✔ accepted" : "✘ rejected"}${e.count > 1 ? ` ×${e.count}` : ""}`;
     case "command.exec":
     case "file.download":
     case "honeytoken.read":

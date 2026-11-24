@@ -1,6 +1,8 @@
 "use client";
 import { Check, Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { DigestSettings } from "@/components/retention/digest";
+import DataPanel from "@/components/settings/data-panel";
 import MembersPanel from "@/components/settings/members-panel";
 import { NotificationsPanel } from "@/components/settings/notifications-panel";
 import {
@@ -353,6 +355,7 @@ export default function SettingsPage() {
       </Section>
 
       <NotificationsPanel />
+      <DigestSettings />
 
       <Section
         title="Detection policy"
@@ -459,6 +462,7 @@ export default function SettingsPage() {
       </Section>
 
       <MembersPanel />
+      <DataPanel />
 
       <Dialog
         open={!!newKey}

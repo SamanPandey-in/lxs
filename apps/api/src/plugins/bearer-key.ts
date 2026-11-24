@@ -61,6 +61,7 @@ export async function authenticateKey(
         revokedAt: apiKeys.revokedAt,
         orgId: projects.orgId,
         archivedAt: projects.archivedAt,
+        deletedAt: projects.deletedAt,
         orgDisabledAt: organizations.disabledAt,
       })
       .from(apiKeys)
@@ -72,6 +73,8 @@ export async function authenticateKey(
     if (!row) throw unauthorized('Unknown API key', 'invalid_key');
     if (row.revokedAt) throw forbidden('API key has been revoked', 'key_revoked');
     if (row.archivedAt) throw forbidden('Project is archived', 'project_archived');
+    // Soft delete revokes the keys too; this also covers a key cached before the delete.
+    if (row.deletedAt) throw forbidden('Project has been deleted', 'project_deleted');
     // Admin kill switch: a disabled org's keys stop working (within the cache TTL).
     if (row.orgDisabledAt)
       throw new HttpError(403, 'E_ORG_DISABLED', 'This organization has been disabled');

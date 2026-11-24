@@ -10,6 +10,8 @@ export const QUEUES = {
   narrateIncident: 'narrate-incident',
   assessIncident: 'assess-incident',
   notifyIncident: 'notify-incident',
+  weeklyDigest: 'weekly-digest',
+  exportProject: 'export-project',
 } as const;
 
 export interface NotifyIncidentJob {
@@ -287,3 +289,42 @@ export async function enqueueNotifyIncident(
     setTimeout(() => run(0), Math.max(0, delaySeconds) * 1000).unref?.();
   }
 }
+
+/** The weekly digest cron; `off` (any case) disables it. */
+export const digestCron = (expr = env.DIGEST_CRON): string | null =>
+  expr.trim().toLowerCase() === 'off' ? null : expr.trim();
+export interface ExportProjectJob {
+  exportId: string;
+}
+
+type Exporter = (exportId: string) => Promise<unknown>;
+let inProcessExporter: Exporter | null = null;
+export const setInProcessExporter = (fn: Exporter): void => {
+  inProcessExporter = fn;
+};
+
+/**
+ * Queue a project export (worker/export-project.ts). The job is idempotent: it only picks
+ * up an export row still in `pending`, so a retry after a crash mid-run is marked failed by
+ * maintenance instead of writing two bundles. Without pg-boss it runs in-process.
+ */
+export async function enqueueExportProject(exportId: string): Promise<void> {
+  const b = getBoss();
+  if (b) {
+    try {
+      await b.send(QUEUES.exportProject, { exportId } satisfies ExportProjectJob, {
+        retryLimit: 0,
+        singletonKey: exportId,
+        expireInSeconds: 3600,
+      });
+      return;
+    } catch {
+      /* fall through to in-process */
+    }
+  }
+  if (inProcessExporter) {
+    const fn = inProcessExporter;
+    setImmediate(() => void fn(exportId).catch(() => {}));
+  }
+}
+

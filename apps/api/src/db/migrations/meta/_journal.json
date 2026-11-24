@@ -71,6 +71,20 @@
       "when": 1795453352386,
       "tag": "0009_sample_data",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1795518569650,
+      "tag": "0010_digest_coverage",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1795520052483,
+      "tag": "0011_data_handling",
+      "breakpoints": true
     }
   ]
 }

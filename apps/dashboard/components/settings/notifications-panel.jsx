@@ -14,6 +14,7 @@ import {
   RelativeTime,
   Select,
   StatusDot,
+  Switch,
   TableSkeleton,
 } from "@/components/ui";
 import { Input } from "@/components/ui/input";
@@ -71,8 +72,17 @@ function Health({ channel }) {
   );
 }
 
-function ChannelRow({ channel, onTested, onDelete }) {
+function ChannelRow({ channel, onTested, onDelete, onChanged }) {
   const [busy, setBusy] = useState(false);
+  const setDigest = async (on) => {
+    onChanged({ ...channel, digest: on });
+    try {
+      onChanged(await channelsApi.update(channel.id, { digest: on }));
+    } catch (err) {
+      onChanged(channel);
+      toast("Could not change the weekly digest", "error", err.message);
+    }
+  };
   const sendTest = async () => {
     setBusy(true);
     try {
@@ -120,6 +130,14 @@ function ChannelRow({ channel, onTested, onDelete }) {
         <Health channel={channel} />
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+          <Switch
+            checked={Boolean(channel.digest)}
+            onChange={setDigest}
+            label={`Send weekly digest to ${channel.name}`}
+          />
+          <span aria-hidden>Weekly digest</span>
+        </span>
         <Badge
           variant="tag"
           tone="neutral"
@@ -235,7 +253,7 @@ export function NotificationsPanel() {
     }));
 
   return (
-    <section aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
+    <section id="notifications" aria-labelledby={headingId} className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-wrap items-end justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <h2 id={headingId} className="m-0 text-lg font-semibold text-foreground">
@@ -271,7 +289,15 @@ export function NotificationsPanel() {
         ) : (
           <ul className="m-0 list-none p-0">
             {channels.map((c) => (
-              <ChannelRow key={c.id} channel={c} onTested={onTested} onDelete={setDeleting} />
+              <ChannelRow
+                key={c.id}
+                channel={c}
+                onTested={onTested}
+                onDelete={setDeleting}
+                onChanged={(next) =>
+                  update((list) => list.map((x) => (x.id === next.id ? next : x)))
+                }
+              />
             ))}
           </ul>
         )}
