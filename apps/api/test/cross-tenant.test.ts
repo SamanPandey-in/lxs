@@ -45,6 +45,9 @@ const NOT_TENANT_SCOPED: Record<string, string> = {
   'GET /v1/agent/policy': 'project comes from the bearer key',
   'GET /v1/agent/whoami': 'project comes from the bearer key',
   'POST /v1/agent/selftest-report': 'project comes from the bearer key',
+  // No session: authenticated by the Slack signature, checked with the secret of the project
+  // named in the button value (see slack-actions.test.ts for the A-signature-on-B case).
+  'POST /v1/integrations/slack/actions': 'Slack-signed per project; no session or cookie',
 };
 
 /** Tenant-scoped through the query string rather than the path. */

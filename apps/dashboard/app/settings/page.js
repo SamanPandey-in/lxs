@@ -5,6 +5,7 @@ import { DigestSettings } from "@/components/retention/digest";
 import DataPanel from "@/components/settings/data-panel";
 import MembersPanel from "@/components/settings/members-panel";
 import { NotificationsPanel } from "@/components/settings/notifications-panel";
+import ResponsePanel from "@/components/settings/response-panel";
 import {
   Badge,
   Button,
@@ -356,6 +357,7 @@ export default function SettingsPage() {
 
       <NotificationsPanel />
       <DigestSettings />
+      <ResponsePanel />
 
       <Section
         title="Detection policy"

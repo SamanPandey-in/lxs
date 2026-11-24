@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import {
   type AssessIncidentJob,
+  type AutoBlockJob,
   digestCron,
   type ExportProjectJob,
   getBoss,
@@ -9,6 +10,7 @@ import {
   type ProcessEventsJob,
   QUEUES,
   setInProcessAssessor,
+  setInProcessAutoBlocker,
   setInProcessExporter,
   setInProcessNarrator,
   setInProcessNotifier,
@@ -16,6 +18,7 @@ import {
 } from '../jobs/queue.js';
 import { timeJob } from '../plugins/metrics.js';
 import { assessIncident } from './assess-incident.js';
+import { autoBlockIncident } from './auto-block.js';
 import { loadDetection } from './detection.js';
 import { exportProject } from './export-project.js';
 import {
@@ -40,6 +43,7 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
   setInProcessNarrator(narrateIncident);
   setInProcessAssessor(assessIncident);
   setInProcessNotifier(notifyIncident);
+  setInProcessAutoBlocker(autoBlockIncident);
   setInProcessExporter((id) => exportProject(id));
   log.info(
     llmConfig
@@ -85,6 +89,12 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
         await timeJob(QUEUES.exportProject, () =>
           exportProject((j as { data: ExportProjectJob }).data.exportId),
+        );
+    });
+    await boss.work<AutoBlockJob>(QUEUES.autoBlock, async (jobs) => {
+      for (const j of Array.isArray(jobs) ? jobs : [jobs])
+        await timeJob(QUEUES.autoBlock, () =>
+          autoBlockIncident((j as { data: AutoBlockJob }).data.incidentId),
         );
     });
     const cron = async (queue: string, expr: string, fn: () => Promise<unknown>) => {

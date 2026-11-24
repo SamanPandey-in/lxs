@@ -1,6 +1,7 @@
 import { and, asc, sql as dsql, eq, ne } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
+import { recordLlmUsage, reserveLlmCall } from '../lib/llm-budget.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { commonCredentials, loadDetection } from './detection.js';
 import { llmProvider } from './narrator.js';
@@ -107,6 +108,12 @@ export async function assessIncident(
     await updateStatus(incident.projectId, incidentId, 'fallback');
     return 'capped';
   }
+  // H7: global / org / project caps (lib/llm-budget.ts records which one refused).
+  const budget = await reserveLlmCall(incident.projectId);
+  if (!budget.allowed) {
+    await updateStatus(incident.projectId, incidentId, 'fallback');
+    return 'capped';
+  }
 
   await updateStatus(incident.projectId, incidentId, 'generating');
   const prompt = buildPrompt({
@@ -126,6 +133,7 @@ export async function assessIncident(
       user: prompt.user,
       schema: OUTPUT_SCHEMA,
     });
+    await recordLlmUsage(incident.projectId, reply.model, reply.usage);
     const parsed = clampAssessment(JSON.parse(reply.text));
     const output = { ...parsed, assessment: true };
     await storeAssessment(

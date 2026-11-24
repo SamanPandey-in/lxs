@@ -63,6 +63,10 @@ const EnvSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
   // Provider calls per project per UTC day; past it, incidents get the template.
   LLM_DAILY_CAP: z.coerce.number().int().nonnegative().default(200),
+  // H7: provider calls per UTC day across the whole platform, and per organization when the
+  // org has no llm_daily_cap of its own. Past either, incidents get the template.
+  LLM_GLOBAL_DAILY_CAP: z.coerce.number().int().nonnegative().default(2000),
+  LLM_ORG_DAILY_CAP: z.coerce.number().int().nonnegative().default(1000),
   LLM_DEBOUNCE_SECONDS: z.coerce.number().int().nonnegative().default(15),
   // Identity and tenancy. APP_URL is the dashboard origin used in emailed links.
   APP_URL: z.string().url().default('http://localhost:3000'),
@@ -79,6 +83,11 @@ const EnvSchema = z.object({
   MAX_PROJECTS_PER_ORG: z.coerce.number().int().positive().default(5),
   MAX_KEYS_PER_ORG: z.coerce.number().int().positive().default(10),
   SIGNUP_RATE_PER_HOUR: z.coerce.number().int().positive().default(10),
+  // Response automation: CIDRs the platform itself uses (comma separated). Never auto-blocked.
+  PLATFORM_IP_RANGES: z.string().default(''),
+  // Optional cached JSON list of CI runner CIDRs (e.g. GitHub Actions meta) for allowlist
+  // suggestions. Read from disk only; never fetched at request time.
+  ALLOWLIST_CI_RANGES_FILE: z.string().optional(),
   // Bearer token for GET /metrics. Unset: open in dev/test, disabled (404) in production.
   METRICS_TOKEN: z.string().min(16).optional(),
   // Weekly digest schedule (pg-boss cron, UTC). Default Monday 09:00. "off" disables it.

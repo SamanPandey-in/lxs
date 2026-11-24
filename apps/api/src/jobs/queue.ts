@@ -12,6 +12,7 @@ export const QUEUES = {
   notifyIncident: 'notify-incident',
   weeklyDigest: 'weekly-digest',
   exportProject: 'export-project',
+  autoBlock: 'auto-block',
 } as const;
 
 export interface NotifyIncidentJob {
@@ -328,3 +329,40 @@ export async function enqueueExportProject(exportId: string): Promise<void> {
   }
 }
 
+export interface AutoBlockJob {
+  incidentId: string;
+}
+
+type AutoBlocker = (incidentId: string) => Promise<unknown>;
+let inProcessAutoBlocker: AutoBlocker | null = null;
+export const setInProcessAutoBlocker = (fn: AutoBlocker): void => {
+  inProcessAutoBlocker = fn;
+};
+
+/**
+ * Evaluate the project's auto-block policy for an incident. Cheap and idempotent (the job
+ * re-reads everything and refuses to act twice per incident), so it is enqueued after every
+ * processed group; a 2 s singleton window collapses bursts.
+ */
+export async function enqueueAutoBlock(incidentId: string): Promise<void> {
+  const b = getBoss();
+  if (b) {
+    try {
+      await b.send(QUEUES.autoBlock, { incidentId } satisfies AutoBlockJob, {
+        singletonKey: incidentId,
+        singletonSeconds: 2,
+        singletonNextSlot: true,
+        retryLimit: 3,
+        retryBackoff: true,
+        retryDelay: 2,
+      });
+      return;
+    } catch {
+      /* fall through to in-process */
+    }
+  }
+  if (inProcessAutoBlocker) {
+    const fn = inProcessAutoBlocker;
+    setImmediate(() => void fn(incidentId).catch(() => {}));
+  }
+}

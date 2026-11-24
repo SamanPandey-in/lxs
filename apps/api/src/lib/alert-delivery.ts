@@ -139,7 +139,24 @@ export function killChainSummary(i: Pick<AlertIncident, 'stages' | 'techniques'>
 const slackEscape = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-export function formatSlack(i: AlertIncident, dashboardUrl: string): Record<string, unknown> {
+/** Interactive buttons (need a Slack app; see docs/ALERTS.md). Handled by modules/integrations-slack.ts. */
+export const SLACK_ACTIONS = {
+  block: 'lxs_block_24h',
+  ignore: 'lxs_ignore',
+  undo: 'lxs_undo_block',
+} as const;
+export const SLACK_RESPONSE_BLOCK_ID = 'lxs_response';
+
+/** Button value: which project and incident the click is about (the signature is checked per project). */
+export const slackActionValue = (projectId: string, incidentId: string, blockId?: string): string =>
+  JSON.stringify({ p: projectId, i: incidentId, ...(blockId && { b: blockId }) });
+
+export function formatSlack(
+  i: AlertIncident,
+  dashboardUrl: string,
+  /** Set only when the project has a Slack app configured: adds Block 24h / Ignore on Critical. */
+  interactive?: { projectId: string },
+): Record<string, unknown> {
   const url = incidentUrl(dashboardUrl, i.id);
   const headline = `[${sevLabel(i.severity)}] #${i.number} ${i.title}`;
   const flags = [
@@ -177,6 +194,38 @@ export function formatSlack(i: AlertIncident, dashboardUrl: string): Record<stri
           },
         ],
       },
+      ...(interactive && i.severity === 'critical'
+        ? [
+            {
+              type: 'actions',
+              block_id: SLACK_RESPONSE_BLOCK_ID,
+              elements: [
+                {
+                  type: 'button',
+                  action_id: SLACK_ACTIONS.block,
+                  text: { type: 'plain_text', text: 'Block 24h' },
+                  style: 'danger',
+                  value: slackActionValue(interactive.projectId, i.id),
+                  confirm: {
+                    title: { type: 'plain_text', text: 'Block this source?' },
+                    text: {
+                      type: 'mrkdwn',
+                      text: `Block \`${slackEscape(i.srcIp)}\` on every sensor for 24 hours.`,
+                    },
+                    confirm: { type: 'plain_text', text: 'Block 24h' },
+                    deny: { type: 'plain_text', text: 'Cancel' },
+                  },
+                },
+                {
+                  type: 'button',
+                  action_id: SLACK_ACTIONS.ignore,
+                  text: { type: 'plain_text', text: 'Ignore' },
+                  value: slackActionValue(interactive.projectId, i.id),
+                },
+              ],
+            },
+          ]
+        : []),
     ],
   };
 }

@@ -4,6 +4,7 @@ import { db, type Tx } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
 import {
   enqueueAssessIncident,
+  enqueueAutoBlock,
   enqueueNarrate,
   enqueueNotifyIncident,
   type ProcessEventsJob,
@@ -138,6 +139,7 @@ async function processPending(
       // In split API/worker deployments the worker may own the LLM credentials.
       if (incidentId) await enqueueNarrate(incidentId);
       if (incidentId) await enqueueNotifyIncident(incidentId);
+      if (incidentId) await enqueueAutoBlock(incidentId);
       if (incidentId && assess && llmConfig) await enqueueAssessIncident(incidentId);
     } catch (err) {
       firstError ??= err;

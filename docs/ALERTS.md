@@ -66,3 +66,75 @@ Channel URLs and signing secrets are encrypted with AES-256-GCM using `ENCRYPTIO
 with a key-version byte. Rows written before `ENCRYPTION_KEY` existed used a key derived from
 `SESSION_SECRET`; they still decrypt, and `pnpm --filter @lxs/api db:reencrypt-channels`
 rewrites them in the new format. Run it before rotating `SESSION_SECRET`.
+
+## Block from Slack (interactive buttons)
+
+Critical alerts can carry **Block 24h** and **Ignore** buttons. A plain incoming webhook
+cannot do this: a button click has to be sent back to LXS, and Slack only sends clicks to the
+*Interactivity Request URL of a Slack app*. So this needs a Slack app per project (you create
+it; LXS never asks for OAuth access to your workspace). Without one, alerts look as before.
+
+### Setup
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → *From scratch*, in your workspace.
+2. **Interactivity & Shortcuts** → turn on **Interactivity** and set the Request URL to the
+   one shown in **Settings → Block from Slack** (`<PUBLIC_URL>/v1/integrations/slack/actions`).
+   It must be reachable from the internet over https.
+3. **Incoming Webhooks** → turn on, **Add New Webhook to Workspace**, pick the channel. Add
+   that webhook URL in **Settings → Notifications** as a Slack channel. Messages sent through
+   the app's own webhook route their button clicks to the app; a legacy custom-integration
+   webhook does not.
+4. **Basic Information → App Credentials** → copy the **Signing Secret** into
+   **Settings → Block from Slack** and save. Optionally add the **Workspace ID** (`T…`) so
+   clicks from any other workspace are refused.
+5. Map Slack users to LXS members, either:
+   - **Bot token (recommended):** **OAuth & Permissions** → add the bot scopes `users:read`
+     and `users:read.email`, install the app, and paste the `xoxb-…` token. The clicking user is
+     looked up with `users.info` and matched to an LXS member by email; or
+   - **Manual links:** without a bot token, link each Slack user ID (`U…`, from the user's
+     profile → *Copy member ID*) to an LXS member in the same panel.
+
+The signing secret and bot token are stored AES-256-GCM encrypted with `ENCRYPTION_KEY`
+(same helpers as channel URLs) and are never returned by the API.
+
+### What happens on a click
+
+- `POST /v1/integrations/slack/actions` has no session. It accepts only Slack's
+  `application/x-www-form-urlencoded` body and checks `X-Slack-Signature`:
+  `v0=` + hex HMAC-SHA256(signing secret, `v0:<X-Slack-Request-Timestamp>:<raw body>`),
+  compared in constant time, with the timestamp within 5 minutes. The secret used is the one
+  of the **project named in the button**, so a valid signature from project A's app can never
+  act on project B. The incident must also belong to that project. Anything else is `401`.
+- The Slack user must map to a member of the project's organization with at least the
+  **analyst** role. Refusals are answered privately in Slack and written to the audit log
+  (`response.slack.denied`).
+- **Block 24h** goes through the same code path as a manual block (blocklist entry with
+  `source: slack`, policy version bump, response action, audit entry `response.block_ip`
+  carrying the Slack user ID, name and workspace). The allowlist, the platform ranges
+  (`PLATFORM_IP_RANGES`) and private ranges are refused as for auto-block.
+- The message is updated in place through Slack's `response_url` (only `https://hooks.slack.com/…`
+  is ever contacted) with who did what, and an **Undo block** button. Undo unblocks through
+  the normal audited path. **Ignore** is audited (`response.slack.ignore`) and changes nothing.
+
+## Auto-block policy
+
+Settings → Response automation. **Off by default.** One explicit, deterministic rule per
+project, for example "block when an incident is Critical AND labelled targeted, for 24 h":
+
+| Setting | Values |
+|---|---|
+| Mode | `monitor` (records "would block" in the audit log, blocks nothing) or `enforce` |
+| Minimum severity | low, medium, high, critical |
+| Labels | any of targeted, opportunistic, noise (none = any label) |
+| Duration | 1 hour to 30 days |
+| Require real asset touch | only incidents that reached a protected (non-decoy) route |
+| Allow private ranges | off: RFC 1918, loopback, CGNAT, link-local and ULA are never blocked |
+
+After every processed event group the worker enqueues a small `auto-block` job. The decision
+(`decideAutoBlock`, `lib/auto-block.ts`) is a pure function; the LLM is never consulted. It
+acts at most once per incident (block, would-block or refusal) and never re-blocks a source a
+person unblocked within the block duration, so an undo is final. Sample data and closed
+incidents are ignored. A block is made through the same path as a manual one, as the system
+actor (`system:auto-block`), with `source: auto` and the rule that fired stored on the
+blocklist row and in the audit entry. Allowlisted sources and `PLATFORM_IP_RANGES` are never
+blocked. Undo is one click in Settings → Response automation or on the Blocklist page.

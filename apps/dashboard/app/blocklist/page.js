@@ -3,6 +3,7 @@ import { Ban, Plus } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { toast as sonner } from "sonner";
+import AllowlistSuggestions from "@/components/allowlist-suggestions";
 import {
   Button,
   EmptyState,
@@ -292,6 +293,8 @@ export default function BlocklistPage() {
           </Table>
         </SectionCard>
       ) : null}
+
+      <AllowlistSuggestions />
 
       <Modal
         open={!!target}

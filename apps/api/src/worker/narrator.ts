@@ -3,6 +3,7 @@ import { db } from '../db/client.js';
 import { aiSummaries, attackers, detections, events, incidents, projects } from '../db/schema.js';
 import { env } from '../env.js';
 import { createLlmProvider, type LlmConfig, type LlmProvider, llmConfigFrom } from '../lib/llm.js';
+import { recordLlmUsage, reserveLlmCall } from '../lib/llm-budget.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
 import {
@@ -134,6 +135,12 @@ export async function narrateIncident(incidentId: string): Promise<NarrateOutcom
     await store(template(), { provider: 'template', model: 'daily-cap' });
     return 'capped';
   }
+  // H7: global / org / project caps. The template row records which cap refused the call.
+  const budget = await reserveLlmCall(incident.projectId);
+  if (!budget.allowed) {
+    await store(template(), { provider: 'template', model: budget.reason });
+    return 'capped';
+  }
 
   const llm = llmProvider;
   const started = Date.now();
@@ -143,6 +150,7 @@ export async function narrateIncident(incidentId: string): Promise<NarrateOutcom
       user: buildUserPrompt(sheet),
       schema: OUTPUT_JSON_SCHEMA,
     });
+    await recordLlmUsage(incident.projectId, reply.model, reply.usage);
     await store(parseLlmOutput(reply.text), {
       provider: llm.name,
       model: reply.model,

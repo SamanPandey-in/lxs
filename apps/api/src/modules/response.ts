@@ -42,13 +42,29 @@ async function bumpPolicy(tx: Tx, projectId: string): Promise<number> {
   return p!.v;
 }
 
-/** One transaction: blocklist row + policy_version bump + response action + audit (BREAKDOWN 8.3). */
+/** Who/what asked for a block. Manual blocks omit it; auto-block and Slack pass it. */
+export interface BlockMeta {
+  source?: 'manual' | 'auto' | 'slack';
+  /** The policy that fired (auto-block). Stored on the blocklist row and in the audit log. */
+  rule?: Record<string, unknown> | null;
+  /** 'system' for auto-block (user.id is then e.g. 'system:auto-block'). */
+  actorType?: 'user' | 'system';
+  /** Extra audit metadata, e.g. the Slack user. */
+  audit?: Record<string, unknown>;
+}
+
+/**
+ * One transaction: blocklist row + policy_version bump + response action + audit (BREAKDOWN 8.3).
+ * The single block path: manual, auto-block and Slack all come through here.
+ */
 export async function blockIp(
-  access: Pick<ProjectAccess, 'project' | 'user'>,
+  access: { project: ProjectAccess['project']; user: Pick<ProjectAccess['user'], 'id'> },
   p: { ip: string; durationHours?: number | null; reason?: string; incidentId?: string | null },
   req?: Parameters<typeof audit>[1]['req'],
+  meta: BlockMeta = {},
 ) {
   const { project, user } = access;
+  const source = meta.source ?? 'manual';
   return db.transaction(async (tx) => {
     await assertBlockable(tx, project.id, p.ip);
     const expiresAt = p.durationHours ? new Date(Date.now() + p.durationHours * 3600_000) : null;
@@ -61,6 +77,8 @@ export async function blockIp(
         incidentId: p.incidentId ?? null,
         createdBy: user.id,
         expiresAt,
+        source,
+        rule: meta.rule ?? null,
       })
       .onConflictDoUpdate({
         target: [blocklistEntries.projectId, blocklistEntries.ip],
@@ -81,6 +99,7 @@ export async function blockIp(
           reason: p.reason ?? null,
           policy_version: version,
           blocklist_entry_id: entry!.id,
+          ...(source !== 'manual' && { source }),
         },
         requestedBy: user.id,
       })
@@ -88,7 +107,7 @@ export async function blockIp(
     await audit(tx, {
       orgId: project.orgId,
       projectId: project.id,
-      actorType: 'user',
+      actorType: meta.actorType ?? 'user',
       actorId: user.id,
       action: 'response.block_ip',
       targetType: 'blocklist_entry',
@@ -97,6 +116,9 @@ export async function blockIp(
         ip: p.ip,
         duration_hours: p.durationHours ?? null,
         incident_id: p.incidentId ?? null,
+        ...(source !== 'manual' && { source }),
+        ...(meta.rule && { rule: meta.rule }),
+        ...meta.audit,
       },
       req,
     });
@@ -110,9 +132,10 @@ export async function blockIp(
 }
 
 export async function unblockIp(
-  access: Pick<ProjectAccess, 'project' | 'user'>,
+  access: { project: ProjectAccess['project']; user: Pick<ProjectAccess['user'], 'id'> },
   p: { ip?: string; entryId?: string; incidentId?: string | null },
   req?: Parameters<typeof audit>[1]['req'],
+  meta: Pick<BlockMeta, 'audit'> = {},
 ) {
   const { project, user } = access;
   return db.transaction(async (tx) => {
@@ -152,7 +175,7 @@ export async function unblockIp(
       action: 'response.unblock_ip',
       targetType: 'blocklist_entry',
       targetId: entry.id,
-      metadata: { ip: entry.ip },
+      metadata: { ip: entry.ip, ...meta.audit },
       req,
     });
     return {
@@ -257,6 +280,22 @@ export async function buildIocs(
         first_seen: e.at,
         last_seen: e.at,
         context: `Accepted on ${e.dst_service} (common credential)`,
+      });
+    // After CREDENTIAL_HASH_DAYS the clear password is replaced by a peppered hash
+    // (worker/maintenance.ts); export the username with the hash, never a blank.
+    else if (
+      e.event_type === 'auth.attempt' &&
+      e.outcome === 'success' &&
+      f.username &&
+      f.password_hash &&
+      f.password_common
+    )
+      add({
+        type: 'credential',
+        value: `${f.username}:${f.password_hash}`,
+        first_seen: e.at,
+        last_seen: e.at,
+        context: `Accepted on ${e.dst_service} (common credential; password hashed)`,
       });
     if (e.event_type === 'command.exec' && f.command) {
       add({
@@ -495,6 +534,8 @@ export async function responseRoutes(app: FastifyInstance): Promise<void> {
         created_at: iso(b.createdAt),
         expires_at: iso(b.expiresAt),
         removed_at: iso(b.removedAt),
+        source: b.source,
+        rule: b.rule ?? null,
       })),
     };
   });

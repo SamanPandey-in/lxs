@@ -459,8 +459,12 @@ export const blocklistEntries = pgTable(
     expiresAt: ts('expires_at'),
     removedAt: ts('removed_at'),
     removedBy: text('removed_by'),
+    /** manual | auto | slack. `auto` rows carry the policy that fired in `rule`. */
+    source: text('source').notNull().default('manual'),
+    rule: jsonb('rule'),
   },
   (t) => [
+    index('blocklist_project_incident_idx').on(t.projectId, t.incidentId),
     uniqueIndex('blocklist_project_ip_active_uq')
       .on(t.projectId, t.ip)
       .where(sql`${t.removedAt} is null`),
@@ -621,4 +625,79 @@ export const projectMilestones = pgTable(
     recordedAt: ts('recorded_at').notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.key] })],
+);
+
+/**
+ * Auto-block policy (one per project). Off by default. The decision is the pure
+ * `decideAutoBlock` in lib/auto-block.ts; the LLM is never consulted.
+ */
+export const responsePolicies = pgTable('response_policies', {
+  projectId: uuid('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  enabled: boolean('enabled').notNull().default(false),
+  mode: text('mode').notNull().default('monitor'), // monitor | enforce
+  minSeverity: text('min_severity').notNull().default('critical'),
+  labels: text('labels').array().notNull().default(sql`ARRAY['targeted']::text[]`),
+  durationHours: integer('duration_hours').notNull().default(24),
+  requireRealAssetTouch: boolean('require_real_asset_touch').notNull().default(false),
+  allowPrivate: boolean('allow_private').notNull().default(false),
+  updatedBy: text('updated_by'),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+/** Slack app used for interactive alert buttons. Secrets are encrypted (lib/channel-crypto.ts). */
+export const slackIntegrations = pgTable('slack_integrations', {
+  projectId: uuid('project_id')
+    .primaryKey()
+    .references(() => projects.id, { onDelete: 'cascade' }),
+  signingSecretEncrypted: bytea('signing_secret_encrypted').notNull(),
+  botTokenEncrypted: bytea('bot_token_encrypted'),
+  teamId: text('team_id'),
+  createdBy: text('created_by'),
+  createdAt: createdAt(),
+  updatedAt: ts('updated_at').notNull().defaultNow(),
+});
+
+/** Slack user -> LXS member, for projects without a bot token (no users.info lookup). */
+export const slackUserLinks = pgTable(
+  'slack_user_links',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    slackUserId: text('slack_user_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: createdAt(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.slackUserId] })],
+);
+
+/** LLM spend ledger, one row per project per UTC day. Drives the global/org/project caps. */
+export const llmUsage = pgTable(
+  'llm_usage',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'cascade' }),
+    day: text('day').notNull(), // YYYY-MM-DD (UTC)
+    calls: integer('calls').notNull().default(0),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    /** Estimated USD x 1e6 (list prices; plugins/metrics.ts estimateLlmCostUsd). */
+    costMicros: bigint('cost_micros', { mode: 'number' }).notNull().default(0),
+    cappedCalls: integer('capped_calls').notNull().default(0),
+    lastCapReason: text('last_cap_reason'),
+    updatedAt: ts('updated_at').notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.day] }),
+    index('llm_usage_org_day_idx').on(t.orgId, t.day),
+    index('llm_usage_day_idx').on(t.day),
+  ],
 );

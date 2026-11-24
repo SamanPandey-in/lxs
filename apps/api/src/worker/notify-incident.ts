@@ -20,6 +20,7 @@ import {
   sendToChannel,
 } from '../lib/alert-delivery.js';
 import { decryptSecret } from '../lib/channel-crypto.js';
+import { slackInteractive } from '../modules/integrations-slack.js';
 import { notificationDeliveries as deliveryMetric } from '../plugins/metrics.js';
 
 type ChannelRow = typeof notificationChannels.$inferSelect;
@@ -238,7 +239,7 @@ export async function notifyIncident(incidentId: string): Promise<NotifyOutcome>
     }
     const payload =
       c.type === 'slack'
-        ? formatSlack(alert, env.DASHBOARD_URL)
+        ? formatSlack(alert, env.DASHBOARD_URL, await slackInteractive(inc.projectId))
         : formatWebhook(alert, env.DASHBOARD_URL, inc.projectId);
     const r = await sendChannelPayload(c, payload);
     deliveryMetric.inc({ channel_type: c.type, status: r.delivered ? 'ok' : 'failed' }); // metrics
