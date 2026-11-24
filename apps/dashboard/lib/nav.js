@@ -20,17 +20,30 @@ export const NAV = [
       { href: "/feed", label: "Live feed", icon: Radio, keywords: "events stream" },
       { href: "/incidents", label: "Incidents", icon: ShieldAlert, keywords: "queue alerts" },
       { href: "/attackers", label: "Attackers", icon: Users, keywords: "sources ip" },
-      { href: "/attack", label: "ATT&CK matrix", icon: Grid3x3, keywords: "mitre techniques tactics" },
+      {
+        href: "/attack",
+        label: "ATT&CK matrix",
+        icon: Grid3x3,
+        keywords: "mitre techniques tactics",
+      },
     ],
   },
   {
     group: "Defense",
     items: [
-      { href: "/decoys", label: "Decoys & containment", icon: Boxes, keywords: "honeypots sensors" },
+      {
+        href: "/decoys",
+        label: "Decoys & containment",
+        icon: Boxes,
+        keywords: "honeypots sensors",
+      },
       { href: "/blocklist", label: "Blocklist", icon: Ban, keywords: "block deny ip" },
     ],
   },
-  { group: "Trust", items: [{ href: "/audit", label: "Audit log", icon: ScrollText, keywords: "history actions" }] },
+  {
+    group: "Trust",
+    items: [{ href: "/audit", label: "Audit log", icon: ScrollText, keywords: "history actions" }],
+  },
   {
     group: "System",
     items: [

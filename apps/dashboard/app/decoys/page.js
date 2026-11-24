@@ -65,7 +65,10 @@ function SensorRow({ d, now }) {
             {d.type}
           </Badge>
         </div>
-        <div className="truncate text-sm text-muted-foreground" title={`${d.persona} · ${d.service}`}>
+        <div
+          className="truncate text-sm text-muted-foreground"
+          title={`${d.persona} · ${d.service}`}
+        >
           {d.persona} · <span className="font-mono">{d.service}</span>
         </div>
       </div>

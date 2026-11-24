@@ -73,7 +73,8 @@ export function llmConfigFrom(env: {
 }
 
 /** Models that accept server-side refusal fallbacks. Others answer the parameter with a 400. */
-const SUPPORTS_FALLBACKS = /^claude-(opus-5|fable-5|sonnet-5-5)/;
+// Anthropic documents `fallbacks` only for opus-5, opus-5-5, fable-5-1, fable-5-2 and sonnet-5-5.
+const SUPPORTS_FALLBACKS = /^claude-(opus-5|fable-5-[12]|sonnet-5-5)/;
 
 function anthropicProvider(cfg: LlmConfig): LlmProvider {
   const client = new Anthropic({

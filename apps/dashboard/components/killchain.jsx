@@ -57,7 +57,9 @@ export function KillChain({ stages = [], severity = "critical", detail }) {
               aria-hidden
               className={cn(
                 "relative flex size-6 shrink-0 items-center justify-center rounded-full",
-                on ? cn(bg, "text-(--sev-on)") : "border border-border bg-card text-muted-foreground",
+                on
+                  ? cn(bg, "text-(--sev-on)")
+                  : "border border-border bg-card text-muted-foreground",
               )}
             >
               <Icon className="size-3.5" />
@@ -92,7 +94,10 @@ export function KillMini({ stages = [], severity = "critical", className }) {
       {STAGES.map((s) => (
         <span
           key={s}
-          className={cn("h-1.5 w-3 rounded-sm", reached.has(s) ? bg : "bg-muted ring-1 ring-border ring-inset")}
+          className={cn(
+            "h-1.5 w-3 rounded-sm",
+            reached.has(s) ? bg : "bg-muted ring-1 ring-border ring-inset",
+          )}
         />
       ))}
     </span>

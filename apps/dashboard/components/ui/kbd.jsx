@@ -19,7 +19,11 @@ function Kbd({ className, ...props }) {
 
 function KbdGroup({ className, ...props }) {
   return (
-    <span data-slot="kbd-group" className={cn("inline-flex items-center gap-1", className)} {...props} />
+    <span
+      data-slot="kbd-group"
+      className={cn("inline-flex items-center gap-1", className)}
+      {...props}
+    />
   );
 }
 

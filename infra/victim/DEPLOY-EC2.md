@@ -27,7 +27,7 @@ In the EC2 console (**Launch instance**):
 
 | Setting | Value |
 |---|---|
-| AMI | Amazon Linux 2023 **or** Ubuntu 24.04 LTS, **x86_64** |
+| AMI | Amazon Linux 2023 **or** Ubuntu 24.04 LTS, **x86_64 or arm64 (Graviton)** |
 | Instance type | **t3.medium** (2 vCPU / 4 GB) — see sizing note below |
 | Key pair | your admin SSH key |
 | Storage | 20 GB gp3 |
@@ -37,7 +37,7 @@ In the EC2 console (**Launch instance**):
 **Sizing:** the decoy memory caps total ~1 GB (agent 256m + web 128m + cowrie 256m +
 redis 128m + postgres 256m), plus the shop (~256 MB) and OS/Docker overhead.
 `t3.small` (2 GB) is too tight once you build images on the box; `t3.medium` (4 GB)
-is comfortable. Use x86_64 — the Cowrie/Postgres decoy images are not multi-arch.
+is comfortable. Both x86_64 and arm64 work: all decoy images are multi-arch.
 
 ---
 

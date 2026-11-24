@@ -67,7 +67,12 @@ function Queue() {
   const setParams = (patch) => {
     const next = new URLSearchParams(sp.toString());
     for (const [k, v] of Object.entries(patch)) {
-      if (v == null || v === "" || (k === "tab" && v === "all") || (k === "severity" && v === "any"))
+      if (
+        v == null ||
+        v === "" ||
+        (k === "tab" && v === "all") ||
+        (k === "severity" && v === "any")
+      )
         next.delete(k);
       else next.set(k, v);
     }
@@ -129,7 +134,11 @@ function Queue() {
     setResolving(true);
     try {
       const n = await api.bulkResolveNoise(ids);
-      toast(`Resolved ${n} noise incident${n === 1 ? "" : "s"}`, "success", "Written to the audit log.");
+      toast(
+        `Resolved ${n} noise incident${n === 1 ? "" : "s"}`,
+        "success",
+        "Written to the audit log.",
+      );
       storeActions.refresh();
     } catch (e) {
       toast("Couldn't resolve noise", "error", e.message);
@@ -151,7 +160,11 @@ function Queue() {
   else if (!st.loaded && st.error)
     body = (
       <div className="px-5 pt-4 pb-1">
-        <PageError error={st.error} onRetry={storeActions.refresh} label="Couldn't load incidents" />
+        <PageError
+          error={st.error}
+          onRetry={storeActions.refresh}
+          label="Couldn't load incidents"
+        />
       </div>
     );
   else if (rows.length === 0)
@@ -208,52 +221,52 @@ function Queue() {
           ]}
           aria-label="Incident queues"
         >
-        <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 py-3 md:px-5">
-          <SearchInput
-            value={q}
-            onValueChange={setQ}
-            placeholder="Filter by IP, #number or title…"
-            aria-label="Filter incidents"
-            className="min-w-0 basis-full sm:max-w-sm sm:flex-1 sm:basis-auto"
-          />
-          <Select
-            value={severity}
-            onValueChange={(v) => setParams({ severity: v })}
-            options={SEVERITY_OPTIONS}
-            aria-label="Severity"
-            className="w-auto min-w-36"
-          />
-          {technique ? (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setParams({ technique: null })}
-              aria-label={`Remove technique filter ${techTitle(technique).split("\n")[0]}`}
-            >
-              <span className="font-mono" translate="no">
-                {technique}
+          <div className="flex min-w-0 flex-wrap items-center gap-2 px-4 py-3 md:px-5">
+            <SearchInput
+              value={q}
+              onValueChange={setQ}
+              placeholder="Filter by IP, #number or title…"
+              aria-label="Filter incidents"
+              className="min-w-0 basis-full sm:max-w-sm sm:flex-1 sm:basis-auto"
+            />
+            <Select
+              value={severity}
+              onValueChange={(v) => setParams({ severity: v })}
+              options={SEVERITY_OPTIONS}
+              aria-label="Severity"
+              className="w-auto min-w-36"
+            />
+            {technique ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setParams({ technique: null })}
+                aria-label={`Remove technique filter ${techTitle(technique).split("\n")[0]}`}
+              >
+                <span className="font-mono" translate="no">
+                  {technique}
+                </span>
+                <X aria-hidden />
+              </Button>
+            ) : null}
+            {filtering && st.bootstrapped ? (
+              <span className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
+                {rows.length} of {tabTotal}
               </span>
-              <X aria-hidden />
-            </Button>
-          ) : null}
-          {filtering && st.bootstrapped ? (
-            <span className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
-              {rows.length} of {tabTotal}
-            </span>
-          ) : null}
-          {tab === "noise" && lists.noise.length ? (
-            <Button
-              variant="outline"
-              size="sm"
-              className="ml-auto"
-              loading={resolving}
-              onClick={resolveNoise}
-            >
-              <CheckCheck aria-hidden /> Resolve all noise
-            </Button>
-          ) : null}
-        </div>
-        {body}
+            ) : null}
+            {tab === "noise" && lists.noise.length ? (
+              <Button
+                variant="outline"
+                size="sm"
+                className="ml-auto"
+                loading={resolving}
+                onClick={resolveNoise}
+              >
+                <CheckCheck aria-hidden /> Resolve all noise
+              </Button>
+            ) : null}
+          </div>
+          {body}
         </Tabs>
       </Card>
     </div>

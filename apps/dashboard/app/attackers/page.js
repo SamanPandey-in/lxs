@@ -57,7 +57,13 @@ export default function AttackersPage() {
       />
       <Card
         title="Sources seen"
-        sub={data ? (filtered ? `${fmtNum(rows.length)} of ${fmtNum(data.length)}` : fmtNum(data.length)) : undefined}
+        sub={
+          data
+            ? filtered
+              ? `${fmtNum(rows.length)} of ${fmtNum(data.length)}`
+              : fmtNum(data.length)
+            : undefined
+        }
         flush
       >
         <div className="flex min-w-0 flex-wrap items-center gap-2 px-5 pb-3">
@@ -141,7 +147,9 @@ export default function AttackersPage() {
                     <TableCell>
                       <CadenceTag cadence={a.cadence} />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtNum(a.event_count)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {fmtNum(a.event_count)}
+                    </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {fmtNum(a.session_count)}
                     </TableCell>
@@ -169,7 +177,10 @@ export default function AttackersPage() {
                     className="flex min-w-0 flex-col gap-1.5 px-4 py-3 text-inherit no-underline hover:bg-muted/50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring focus-visible:outline-solid"
                   >
                     <span className="flex min-w-0 items-center gap-2">
-                      <span className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-foreground" translate="no">
+                      <span
+                        className="min-w-0 flex-1 truncate font-mono text-sm font-medium text-foreground"
+                        translate="no"
+                      >
                         {a.ip}
                       </span>
                       <span className="shrink-0 text-xs text-muted-foreground">
@@ -224,7 +235,9 @@ function DecoyTags({ decoys = [], max = 2 }) {
           {d}
         </Badge>
       ))}
-      {rest > 0 ? <span className="text-xs text-muted-foreground tabular-nums">+{rest}</span> : null}
+      {rest > 0 ? (
+        <span className="text-xs text-muted-foreground tabular-nums">+{rest}</span>
+      ) : null}
     </span>
   );
 }

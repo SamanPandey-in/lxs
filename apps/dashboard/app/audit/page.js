@@ -141,11 +141,7 @@ export default function AuditPage() {
         />
         <StatTile label="Last 24 h" value={data ? last24 : "—"} hint="Actions taken today" />
         <StatTile label="Blocks" value={data ? blocks : "—"} hint="Source blocks issued" />
-        <StatTile
-          label="Actors"
-          value={data ? actors.length : "—"}
-          hint="People and system jobs"
-        />
+        <StatTile label="Actors" value={data ? actors.length : "—"} hint="People and system jobs" />
       </div>
 
       <SectionCard

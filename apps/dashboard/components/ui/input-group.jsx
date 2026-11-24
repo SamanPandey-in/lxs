@@ -1,9 +1,9 @@
 "use client";
 
-import { cn } from "@/lib/utils";
 import { Search, X } from "lucide-react";
 import { useRef } from "react";
 import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 
 /*
  * agents/ui/components.md → Input / Search.

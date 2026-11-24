@@ -326,12 +326,7 @@ function Fact({ label, children, mono }) {
   return (
     <div className="min-w-0">
       <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd
-        className={cn(
-          "m-0 truncate text-sm text-foreground tabular-nums",
-          mono && "font-mono",
-        )}
-      >
+      <dd className={cn("m-0 truncate text-sm text-foreground tabular-nums", mono && "font-mono")}>
         {children}
       </dd>
     </div>
@@ -719,8 +714,8 @@ function Summary({ inc, onNarrate, narrating }) {
                 <Skeleton w="95%" />
                 <Skeleton w="88%" />
                 <span className="text-xs text-muted-foreground">
-                  The evidence on this page is complete. The narrative arrives in a few seconds, or a
-                  template is used if the LLM is down.
+                  The evidence on this page is complete. The narrative arrives in a few seconds, or
+                  a template is used if the LLM is down.
                 </span>
               </div>
             ) : (

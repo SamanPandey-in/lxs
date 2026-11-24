@@ -1058,7 +1058,7 @@ export interface LXSOptions {
   service?: string;                     // compose service of the app, default 'app'
   mode?: 'monitor' | 'enforce';         // default 'enforce'
   runDir?: string;                      // default env LXS_RUN_DIR or '/run/lxs'
-  trustProxy?: boolean | string[];      // 'loopback' | 'uniquelocal' | CIDRs; default false
+  trustProxy?: false | number | string[]; // false (default) | hop count 1-10 | loopback/uniquelocal/linklocal/CIDRs; `true` is rejected
   allowlist?: string[];                 // CIDRs never reported or blocked
   disabled?: boolean;                   // default env LXS_DISABLED === '1'
   logger?: Pick<Console, 'warn' | 'error'>;

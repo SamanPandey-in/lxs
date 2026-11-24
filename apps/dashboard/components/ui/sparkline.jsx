@@ -11,13 +11,7 @@ const nf = new Intl.NumberFormat();
  * instead (default: "Trend: from X to Y, peak Z"). An all-zero series draws a flat neutral line.
  * data: number[] (oldest first). Renders nothing with fewer than 2 points.
  */
-function Sparkline({
-  data,
-  height = 32,
-  color = "var(--chart-1)",
-  summary,
-  className,
-}) {
+function Sparkline({ data, height = 32, color = "var(--chart-1)", summary, className }) {
   const rawId = useId();
   const values = Array.isArray(data) ? data.map((v) => Number(v) || 0) : [];
   if (values.length < 2) return null;
@@ -29,7 +23,9 @@ function Sparkline({
   const w = 100;
   const x = (i) => (i / (values.length - 1)) * w;
   const y = (v) => (flat ? height - pad : pad + (1 - (v - min) / (max - min)) * (height - pad * 2));
-  const line = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
+  const line = values
+    .map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(2)},${y(v).toFixed(2)}`)
+    .join(" ");
   const area = `${line} L${w},${height} L0,${height} Z`;
   const text =
     summary ??

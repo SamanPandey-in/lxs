@@ -76,9 +76,7 @@ function StepMark({ state, n }) {
       aria-hidden
       className={cn(
         "flex size-6 shrink-0 items-center justify-center rounded-full border text-xs font-medium tabular-nums",
-        state === "next"
-          ? "border-primary text-primary"
-          : "border-border text-muted-foreground",
+        state === "next" ? "border-primary text-primary" : "border-border text-muted-foreground",
       )}
     >
       {n}

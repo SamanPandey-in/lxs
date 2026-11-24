@@ -13,7 +13,7 @@ A honeypot has no legitimate users, so *any* interaction with it is a near-zero-
 Three pieces, and only three:
 
 1. **The SDK** — `npm i lxs`. Declare decoys in `decoy.config.ts`; `npx lxs build` compiles them into `lxs.compose.yml`. Middleware routes decoy paths to an isolated container and enforces blocks inside the real app.
-2. **The sensor stack** — generated containers that run beside the app: web, Cowrie SSH, Redis RESP, and synthetic PostgreSQL decoys plus an agent that ships events with a Bearer key. The agent is the only component holding a platform credential; the platform never dials in.
+2. **The sensor stack** — generated containers that run beside the app: four decoy types (web, SSH via Cowrie, PostgreSQL and Redis) plus an agent that ships events with a Bearer key. The agent is the only component holding a platform credential; the platform never dials in.
 3. **The platform** — a Fastify API (ingest, detection, incidents, response), PostgreSQL, and a React dashboard fed by Server-Sent Events.
 
 ### The moment that matters
@@ -117,13 +117,26 @@ cd apps/dashboard && npm install && npm run dev  # :3000
 
 ### 4. The decoys
 
-```bash
-docker build -f images/agent.Dockerfile           -t lxs/agent:0.1.0 .
-docker build -f images/decoy-web.Dockerfile       -t lxs/decoy-web:0.1.0 .
-docker build -f images/cowrie-personas.Dockerfile -t lxs/cowrie-personas:0.1.0 .
-docker build -f images/redis-decoy.Dockerfile     -t lxs/decoy-redis:0.1.0 .
-docker build -f images/postgres-decoy.Dockerfile  -t lxs/decoy-postgres:0.1.0 .
+| Decoy | `t.create(...)` type | Image | Runs as |
+|---|---|---|---|
+| Web (admin panels, bait files) | `web-admin`, `web-bait` | `decoy-web` | `ds-web`, no network, reached over a Unix socket |
+| SSH | `ssh` | `cowrie-personas` (Cowrie) | `ds-<id>` on the `ds_trap` bridge |
+| PostgreSQL | `postgres` | `decoy-postgres` | `ds-<id>` on the `ds_trap` bridge |
+| Redis | `redis` | `decoy-redis` | `ds-<id>` on the `ds_trap` bridge |
 
+The generated `lxs.compose.yml` uses `ghcr.io/lxs/{agent,decoy-web,cowrie-personas,decoy-redis,decoy-postgres}:<sdk version>`.
+**These images are not published yet.** Once a release is tagged, `.github/workflows/release-images.yml` publishes them
+(signed, `linux/amd64` and `linux/arm64`) and `docker compose` pulls them. Until then, build them locally with the
+exact tags compose expects:
+
+```bash
+bash infra/victim/build-images.sh   # all five images, tagged ghcr.io/lxs/*:0.1.0, plus the shop
+```
+
+Or point compose at your own builds or digests with `LXS_AGENT_IMAGE`, `LXS_WEB_IMAGE`, `LXS_COWRIE_IMAGE`,
+`LXS_REDIS_IMAGE` and `LXS_POSTGRES_IMAGE`. Then:
+
+```bash
 cd examples/acme-shop
 cp .env.lxs.example .env.lxs        # paste the ingest key from the seed
 npx lxs build                       # config -> lxs.compose.yml + .lxs/
@@ -180,7 +193,7 @@ app.use(decoys.express());   // first
 ## Development
 
 ```bash
-pnpm test        # 109 tests across 7 packages
+pnpm test        # 222 tests across 8 workspace packages (the dashboard has its own npm test)
 pnpm typecheck
 pnpm lint        # Biome
 pnpm build
@@ -220,9 +233,10 @@ The detection engine's golden tests lock the demo's numbers. If you change a rul
 | `docs/API-CONTRACT.md` | The one-page frozen contract everything mocks against |
 | `docs/DEMO-SCRIPT.md` | The 5-minute judge demo, beat by beat, with the failure playbook |
 | `docs/getting-started.md` | The full first-run walkthrough |
-| `docs/PROGRESS.md` | Where we are against the plan, and what is left, in order |
+| `docs/STATUS.md` | **Status as of 2026-11-23**: what is built, what is in progress, verified numbers, known gaps |
+| `docs/IMPLEMENTATION-PLAN.md` | The phased plan from here |
+| `docs/containment/README.md` | How containment is proven (scheduled selftest on a Linux runner) |
 | `docs/PERFORMANCE.md` | What was slow, what was measured, what was fixed |
-| `docs/STATUS.md` | Per-phase detail and known gaps |
 | `docs/frontend.md` | How the dashboard is built |
 
 ---
@@ -238,15 +252,18 @@ The decoys are sensors, never a pivot:
 - Attacker input is logged as data and never executed, interpolated, or rendered unescaped.
 - The LLM only explains. It never scores and never acts.
 
-`npx lxs selftest` probes each decoy from the inside and posts the result to the dashboard's Containment panel.
+`npx lxs selftest` probes each decoy from the inside and, with `--report`, posts the result to the dashboard's Containment panel.
 
-> **Docker Desktop (macOS/Windows) runs containers inside a VM where the host firewall rules cannot be applied.** Development there is fine; the containment *claim* is not. `selftest` reports this honestly rather than passing. Run it on the Linux demo host before making the claim.
+Containment is verified by `selftest` on Linux; see [`docs/containment`](docs/containment/README.md). No Linux run has been recorded yet, so treat the claim as unproven until a dated result appears there.
+
+> **Docker Desktop (macOS/Windows) runs containers inside a VM where the host firewall rules cannot be applied.** Development there is fine; the containment *claim* is not. `selftest` reports this honestly rather than passing.
 
 ---
 
 ## Status
 
-Phases 0–7 and the LLM narrator are built. The narrator has been tested against a stand-in
-provider, not yet a real one: set a real `LLM_API_KEY` to turn it on. Not done: real auth,
-notifications, and proving containment on Linux. See **`docs/PROGRESS.md`** for where
-things stand against the plan and what is left, in the order worth doing it.
+See **[`docs/STATUS.md`](docs/STATUS.md)** (status as of 2026-11-23). In short: phases 0–7 and the LLM narrator are
+built; the narrator has not yet been run against a real provider (set `LLM_API_KEY` to turn it on). Prototype auth
+(signup, login, projects, keys) works. Alert delivery, identity features (verification, reset, members) and sensor
+hardening are in progress (Phase 1). Containment on Linux is not yet proven, and the sensor images are not yet
+published.

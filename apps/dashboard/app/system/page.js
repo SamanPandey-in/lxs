@@ -30,12 +30,13 @@ const NBSP = " ";
 const pct = new Intl.NumberFormat(undefined, { style: "percent", maximumFractionDigits: 1 });
 const secs = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
-
 function uptime(seconds) {
   if (seconds == null) return null;
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
-  return d ? `${d}${NBSP}d ${h}${NBSP}h` : `${h}${NBSP}h ${Math.floor((seconds % 3600) / 60)}${NBSP}min`;
+  return d
+    ? `${d}${NBSP}d ${h}${NBSP}h`
+    : `${h}${NBSP}h ${Math.floor((seconds % 3600) / 60)}${NBSP}min`;
 }
 const latency = (ms) => (ms ? `${secs.format(ms / 1000)}${NBSP}s` : "—");
 
@@ -85,7 +86,10 @@ export default function SystemPage() {
   const llmRan = llmConfigured && Number(llm.calls_24h) > 0;
   const failed = s.failed_jobs || [];
   const agents = s.agents || [];
-  const meta = [s.version ? `Version ${s.version}` : null, uptime(s.uptime_seconds) && `up ${uptime(s.uptime_seconds)}`]
+  const meta = [
+    s.version ? `Version ${s.version}` : null,
+    uptime(s.uptime_seconds) && `up ${uptime(s.uptime_seconds)}`,
+  ]
     .filter(Boolean)
     .join(" · ");
 
@@ -153,7 +157,9 @@ export default function SystemPage() {
               {llmConfigured ? llm.model : "Not configured"}
             </Fact>
             {!llmConfigured && <Fact label="Mode">Template summaries</Fact>}
-            <Fact label="Narrations (24 h)">{llmConfigured ? fmtNum(llm.calls_24h ?? 0) : null}</Fact>
+            <Fact label="Narrations (24 h)">
+              {llmConfigured ? fmtNum(llm.calls_24h ?? 0) : null}
+            </Fact>
             <Fact label="Template fallbacks">
               {llmConfigured ? fmtNum(llm.fallbacks_24h ?? 0) : null}
             </Fact>

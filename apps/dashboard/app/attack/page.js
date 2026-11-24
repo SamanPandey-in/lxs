@@ -77,7 +77,12 @@ function TechniqueCell({ t, max, tactic }) {
               "relative block min-w-0 rounded-md border px-2 py-1.5 pr-8 text-foreground transition-colors duration-120 hover:border-primary focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-ring",
               t.count === 0
                 ? "border-border bg-muted text-muted-foreground"
-                : cn(HEAT_BG, heat > 0.62 ? "border-transparent dark:text-primary-foreground" : "border-border"),
+                : cn(
+                    HEAT_BG,
+                    heat > 0.62
+                      ? "border-transparent dark:text-primary-foreground"
+                      : "border-border",
+                  ),
             )}
           />
         }
@@ -152,7 +157,11 @@ export default function AttackMatrix() {
               {tactics.map((t) => {
                 const seen = t.techniques.reduce((n, x) => n + (x.count > 0 ? 1 : 0), 0);
                 return (
-                  <section key={t.tactic} aria-label={t.tactic} className="flex min-w-0 flex-col gap-1.5">
+                  <section
+                    key={t.tactic}
+                    aria-label={t.tactic}
+                    className="flex min-w-0 flex-col gap-1.5"
+                  >
                     <h3
                       title={`${t.tactic} · ${seen} of ${t.techniques.length} techniques observed`}
                       className="m-0 flex h-8 min-w-0 items-center justify-between gap-2 rounded-md bg-muted px-2 text-xs font-medium tracking-wide text-muted-foreground uppercase"

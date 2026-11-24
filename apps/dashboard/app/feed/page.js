@@ -123,11 +123,7 @@ export default function FeedPage() {
                 </span>
               ) : null}
             </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => storeActions.setPaused(!st.paused)}
-            >
+            <Button variant="outline" size="sm" onClick={() => storeActions.setPaused(!st.paused)}>
               {st.paused ? <Play aria-hidden /> : <Pause aria-hidden />}
               {st.paused ? "Resume" : "Pause"}
             </Button>
@@ -183,7 +179,9 @@ export default function FeedPage() {
               </Button>
             }
           >
-            {q.trim() ? `Nothing from a source matching “${q.trim()}”.` : "Loosen the filters, or wait for the next decoy touch."}
+            {q.trim()
+              ? `Nothing from a source matching “${q.trim()}”.`
+              : "Loosen the filters, or wait for the next decoy touch."}
           </EmptyState>
         ) : (
           <>
@@ -368,7 +366,11 @@ function MobileRow({ e, inc }) {
           <DecoyCell e={e} />
         </span>
       </div>
-      <div className="truncate font-mono text-xs text-muted-foreground" title={detail} translate="no">
+      <div
+        className="truncate font-mono text-xs text-muted-foreground"
+        title={detail}
+        translate="no"
+      >
         {detail}
       </div>
     </div>

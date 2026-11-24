@@ -35,10 +35,7 @@ function CardTitle({ className, ...props }) {
   return (
     <div
       data-slot="card-title"
-      className={cn(
-        "font-heading text-base font-semibold tracking-tight",
-        className,
-      )}
+      className={cn("font-heading text-base font-semibold tracking-tight", className)}
       {...props}
     />
   );
@@ -66,7 +63,11 @@ function CardAction({ className, ...props }) {
 
 function CardContent({ className, ...props }) {
   return (
-    <div data-slot="card-content" className={cn("min-w-0 px-(--card-spacing)", className)} {...props} />
+    <div
+      data-slot="card-content"
+      className={cn("min-w-0 px-(--card-spacing)", className)}
+      {...props}
+    />
   );
 }
 

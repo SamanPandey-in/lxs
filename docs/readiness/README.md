@@ -106,7 +106,7 @@ Judges may ask about each of these, so the script must match what the product do
 | A1 | P1 | **Login rate limiting can be bypassed.** `trustProxy: true` means a spoofed `X-Forwarded-For` header counts as a new IP. It also falsifies audit-log IPs. | **Measured:** 25 of 25 attempts got through with rotating headers. Without spoofing, the limit started at attempt 21 | Make it `TRUST_PROXY` from env, default off | P1 | 5 |
 | A2 | P1 | **Losing the database kills the API, and it doesn't recover.** | **Measured:** `TypeError ... reading 'write'` in `postgres/connection.js:255`; `/healthz` was still unreachable after Postgres restarted | Run it under a restart policy (D8 pattern), and add a logged exit on uncaught exceptions | P1 + P3 | 10 |
 | A3 | P1 | **The attack console's target allowlist can be escaped.** `/http` checks the configured target, then builds the URL from the caller's `path`, so an absolute URL goes anywhere. It also has no auth and open CORS, so any website open in the presenter's browser could drive it. | **Measured:** `new URL('http://169.254.169.254/...', base)` resolves to the metadata address | Reject absolute paths, check the final hostname, add a shared token, bind to `127.0.0.1` locally, limit CORS | P4 | 15 |
-| A4 | P1 | **Containment is unproven.** It's a headline claim, and `ds-firewall.sh` has never run on Linux. | `docs/PROGRESS.md` | Run the firewall script and `selftest` on the VM (see [section 5](#5-aws-deployment)) | P3 | 10 |
+| A4 | P1 | **Containment is unproven.** It's a headline claim, and `ds-firewall.sh` has never run on Linux. | `docs/STATUS.md` (Containment) | Run the firewall script and `selftest` on the VM (see [section 5](#5-aws-deployment)) | P3 | 10 |
 | A5 | P1 | **Local live mode splits one attacker into two.** `pnpm demo` gives HTTP a simulated IP, but SSH uses the real one, so the chain can't form one incident. AWS uses the real IP for both, so it isn't affected. | Code: `demo.mjs:264`, `ssh-attacker.js:44` | Don't use local live mode for Beat 2. Leave `DS_DEV_SIM` off | P4 | 2 |
 | A6 | P1 | **Noise and attack traffic from one IP merge into one incident,** so the noise label disappears. | Code: `process-events.ts:84` | Send noise from Render, and attack from your laptop | P4 | – |
 | A7 | P1 | **There is no way to reset demo data.** Reruns add to the same incident, and blocks persist. | Code: no reset script | Add `scripts/reset-demo.sql` to clear demo rows (back up first) | P4 | 10 |
@@ -207,18 +207,18 @@ docker compose --env-file .env -f infra/platform/docker-compose.platform.yml up 
 ```
 
 ```bash
-docker build -f images/agent.Dockerfile -t lxs/agent:0.1.0 .
+docker build -f images/agent.Dockerfile -t ghcr.io/lxs/agent:0.1.0 .
 ```
 
 ```bash
-docker build -f images/decoy-web.Dockerfile -t lxs/decoy-web:0.1.0 .
+docker build -f images/decoy-web.Dockerfile -t ghcr.io/lxs/decoy-web:0.1.0 .
 ```
 
 ```bash
-docker build -f images/cowrie-personas.Dockerfile -t lxs/cowrie-personas:0.1.0 .
+docker build -f images/cowrie-personas.Dockerfile -t ghcr.io/lxs/cowrie-personas:0.1.0 .
 ```
 
-Seed the database, create a real ingest key in **Settings → Keys**, revoke the dev key, and paste the new key into `examples/acme-shop/.env.lxs`. Export `LXS_AGENT_IMAGE`, `LXS_WEB_IMAGE` and `LXS_COWRIE_IMAGE` with the tags above, because the generated compose otherwise pulls unpublished images. Then:
+Seed the database, create a real ingest key in **Settings → Keys**, revoke the dev key, and paste the new key into `examples/acme-shop/.env.lxs`. The tags above are the ones the generated compose expects, so no `LXS_*_IMAGE` exports are needed. The example also declares Redis and Postgres decoys: `bash infra/victim/build-images.sh` builds all five images (and the shop) in one go. Once the images are published (`.github/workflows/release-images.yml`), `docker compose` can pull them instead. Then:
 
 ```bash
 cd examples/acme-shop && npx lxs build && docker compose -f docker-compose.yml -f lxs.compose.yml up -d

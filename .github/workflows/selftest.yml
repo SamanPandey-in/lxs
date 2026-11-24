@@ -1,0 +1,171 @@
+# Scheduled containment proof: bring up examples/acme-shop on a real Linux host, install the host
+# firewall rules, and run `lxs selftest` with root so the DOCKER-USER/INPUT check is counted.
+#
+# Disabled until a runner exists: the job only runs when the repository variable
+# SELFTEST_ENABLED is 'true'. Setup, runner registration and what the result means:
+# docs/containment/README.md.
+#
+# Output: always uploaded as the `selftest-<date>` artifact. When the repository variable
+# SELFTEST_COMMIT is also 'true' and selftest passes, the workflow commits
+# docs/containment/selftest-<date>.txt to the branch it ran on (needs contents: write and a branch
+# that accepts pushes from GITHUB_TOKEN).
+name: Selftest (containment)
+
+on:
+  schedule:
+    - cron: '23 4 * * 1' # Mondays 04:23 UTC
+  workflow_dispatch:
+    inputs:
+      images:
+        description: 'local = build images from this commit; registry = pull the published tag'
+        type: choice
+        options: [local, registry]
+        default: local
+
+permissions:
+  contents: read
+
+concurrency:
+  group: selftest
+  cancel-in-progress: false
+
+jobs:
+  selftest:
+    if: vars.SELFTEST_ENABLED == 'true'
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 45
+    permissions:
+      contents: write # only used by the opt-in commit step
+    env:
+      EXAMPLE: examples/acme-shop
+      COMPOSE: docker compose -f docker-compose.yml -f lxs.compose.yml
+      IMAGE_NAMESPACE: ${{ vars.IMAGE_NAMESPACE || 'ghcr.io/lxs' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight (Linux, Docker Engine, sudo)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          docker version --format 'docker server {{.Server.Version}}'
+          if docker info --format '{{.OperatingSystem}}' | grep -qi 'docker desktop'; then
+            echo "::error::Docker Desktop detected. Containment can only be proven on Docker Engine on a Linux host."
+            exit 1
+          fi
+          sudo -n true || { echo "::error::the runner user needs passwordless sudo (see docs/containment/README.md)"; exit 1; }
+          command -v iptables >/dev/null || sudo -n sh -c 'command -v iptables' >/dev/null
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install and build the SDK
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter ./sdk/lxs build
+
+      - name: Build the images from this commit
+        if: github.event_name == 'schedule' || inputs.images == 'local'
+        run: bash infra/victim/build-images.sh
+
+      - name: Use the published images
+        if: github.event_name == 'workflow_dispatch' && inputs.images == 'registry'
+        shell: bash
+        run: |
+          set -euo pipefail
+          v="$(node -p "require('./sdk/lxs/package.json').version")"
+          ns="$(echo "$IMAGE_NAMESPACE" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "LXS_AGENT_IMAGE=$ns/agent:$v"
+            echo "LXS_WEB_IMAGE=$ns/decoy-web:$v"
+            echo "LXS_COWRIE_IMAGE=$ns/cowrie-personas:$v"
+            echo "LXS_REDIS_IMAGE=$ns/decoy-redis:$v"
+            echo "LXS_POSTGRES_IMAGE=$ns/decoy-postgres:$v"
+          } >> "$GITHUB_ENV"
+          docker build -f examples/acme-shop/Dockerfile -t acme-shop:latest .
+
+      - name: Generate the sensor stack
+        working-directory: ${{ env.EXAMPLE }}
+        env:
+          # Optional. Without them the agent still starts (it only needs a non-empty key and an
+          # http(s) endpoint); the "agent -> platform" check is then reported as skipped.
+          SELFTEST_INGEST_KEY: ${{ secrets.LXS_SELFTEST_INGEST_KEY }}
+          SELFTEST_ENDPOINT: ${{ vars.LXS_SELFTEST_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          {
+            echo "LXS_INGEST_KEY=${SELFTEST_INGEST_KEY:-ds_live_selftest_placeholder_not_a_key}"
+            echo "LXS_ENDPOINT=${SELFTEST_ENDPOINT:-https://soc.example.invalid}"
+          } > .env.lxs
+          node ../../sdk/lxs/dist/cli/index.js build
+
+      - name: Start the stack
+        working-directory: ${{ env.EXAMPLE }}
+        run: |
+          $COMPOSE up -d --wait --wait-timeout 180 || $COMPOSE up -d
+          $COMPOSE ps
+
+      - name: Install and check the host firewall rules
+        run: |
+          sudo -n bash infra/victim/ds-firewall.sh
+          sudo -n bash infra/victim/ds-firewall.sh --check
+
+      - name: Run lxs selftest (as root, so the firewall check is counted)
+        id: selftest
+        working-directory: ${{ env.EXAMPLE }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          date="$(date -u +%F)"
+          out="$RUNNER_TEMP/selftest-$date.txt"
+          {
+            echo "# lxs selftest: examples/acme-shop"
+            echo "# date:    $(date -u +%FT%TZ)"
+            echo "# commit:  ${GITHUB_SHA}"
+            echo "# run:     ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "# host:    $(uname -srm)"
+            echo "# docker:  $(docker version --format '{{.Server.Version}}') ($(docker info --format '{{.OperatingSystem}}'))"
+            echo "# images:  ${{ github.event_name == 'workflow_dispatch' && inputs.images || 'local' }}"
+            echo
+          } > "$out"
+          sudo -n env "PATH=$PATH" node ../../sdk/lxs/dist/cli/index.js selftest 2>&1 | tee -a "$out"
+          status=${PIPESTATUS[0]}
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "file=$out" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Upload the selftest output
+        if: always() && steps.selftest.outputs.file != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: selftest-${{ steps.selftest.outputs.date }}
+          path: ${{ steps.selftest.outputs.file }}
+          retention-days: 90
+
+      - name: Commit docs/containment/selftest-<date>.txt
+        if: success() && vars.SELFTEST_COMMIT == 'true'
+        shell: bash
+        env:
+          DATE: ${{ steps.selftest.outputs.date }}
+          FILE: ${{ steps.selftest.outputs.file }}
+        run: |
+          set -euo pipefail
+          cp "$FILE" "docs/containment/selftest-$DATE.txt"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "docs/containment/selftest-$DATE.txt"
+          git commit -m "docs(containment): selftest $DATE on $(uname -m) Linux"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Tear down
+        if: always()
+        working-directory: ${{ env.EXAMPLE }}
+        run: |
+          $COMPOSE down -v --remove-orphans || true
+          rm -f .env.lxs
+          sudo -n rm -rf .lxs/secrets || true

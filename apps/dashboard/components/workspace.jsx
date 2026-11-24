@@ -8,14 +8,7 @@ import { toast } from "@/lib/toast";
 import { clock, cn, stamp } from "@/lib/utils";
 import { IncidentQueue } from "./incidents-table";
 import { Badge, Card, Field, Modal, RelativeTime, SearchInput, Select } from "./ui";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "./ui/table";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
 export { stamp, clock };
 export { duration } from "@/lib/utils";
@@ -253,9 +246,13 @@ export function UnblockModal({ open, onClose, ip, onConfirm }) {
         Traffic from{" "}
         <strong className="font-medium text-foreground [overflow-wrap:anywhere]">{ip}</strong> will
         reach the decoys and the app in{" "}
-        {project ? <strong className="font-medium text-foreground">{project}</strong> : "this project"}{" "}
-        again from the next policy poll. The decoys keep scoring it. One row is written to the
-        audit log.
+        {project ? (
+          <strong className="font-medium text-foreground">{project}</strong>
+        ) : (
+          "this project"
+        )}{" "}
+        again from the next policy poll. The decoys keep scoring it. One row is written to the audit
+        log.
       </p>
     </Modal>
   );

@@ -5,7 +5,12 @@
 // the operator set LXS_ALLOW_MOCK=1, only for reads, and only during an outage.
 // Mutations never touch the mock: a block that did not happen must not look like one.
 import { getAllowMock, getApiUrl, loadConfig } from "./config";
-import { PROJECT_ID as MOCK_PROJECT, PROJECT_NAME as MOCK_PROJECT_NAME, mock, TECHNIQUES } from "./mock";
+import {
+  PROJECT_ID as MOCK_PROJECT,
+  PROJECT_NAME as MOCK_PROJECT_NAME,
+  mock,
+  TECHNIQUES,
+} from "./mock";
 
 /** The API base. A getter, not a constant: the real value arrives from /api/config
  *  at runtime, so one production build can run against any host. */

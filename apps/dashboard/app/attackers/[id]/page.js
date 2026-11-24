@@ -1,5 +1,14 @@
 "use client";
-import { ArrowLeft, Bot, Coins, HelpCircle, Radio, ShieldBan, ShieldCheck, User } from "lucide-react";
+import {
+  ArrowLeft,
+  Bot,
+  Coins,
+  HelpCircle,
+  Radio,
+  ShieldBan,
+  ShieldCheck,
+  User,
+} from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useState } from "react";
@@ -203,11 +212,7 @@ export default function AttackerPage() {
             )}
           </Section>
           <Section title="User agents">
-            {fp.user_agents?.length ? (
-              <MonoLines lines={fp.user_agents} />
-            ) : (
-              <Empty>None</Empty>
-            )}
+            {fp.user_agents?.length ? <MonoLines lines={fp.user_agents} /> : <Empty>None</Empty>}
           </Section>
           <Section title="Commands" className="md:col-span-2">
             {fp.commands?.length ? (
@@ -292,7 +297,6 @@ export default function AttackerPage() {
     </div>
   );
 }
-
 
 function Fact({ term, children, mono, wide }) {
   return (

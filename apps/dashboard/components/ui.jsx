@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { SearchInput } from "@/components/ui/input-group";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { EdgeScroller, ScrollShadow } from "@/components/ui/scroll-shadow";
 import {
   SelectContent,
   SelectItem,
@@ -40,7 +41,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { EdgeScroller, ScrollShadow } from "@/components/ui/scroll-shadow";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton as ShadSkeleton } from "@/components/ui/skeleton";
 import { Sparkline } from "@/components/ui/sparkline";
@@ -131,7 +131,12 @@ export function LabelPill({ label, large }) {
   );
 }
 
-const STATUS_TONE = { open: "warn", acknowledged: "info", resolved: "ok", false_positive: "neutral" };
+const STATUS_TONE = {
+  open: "warn",
+  acknowledged: "info",
+  resolved: "ok",
+  false_positive: "neutral",
+};
 /** Status: 6 px dot + text, no border or background. */
 export function StatusPill({ status }) {
   const m = INCIDENT_STATUS[status] || INCIDENT_STATUS.open;
@@ -180,7 +185,12 @@ export function Chip({ children, op, title, href }) {
         : "inline-flex h-5 max-w-full items-center gap-1 truncate rounded-sm bg-muted px-1.5 font-mono text-xs text-muted-foreground";
   return href ? (
     // No prefetch: an incident can render a dozen of these.
-    <Link href={href} prefetch={false} className={cn(cls, op !== "tech" && "hover:text-foreground")} title={title}>
+    <Link
+      href={href}
+      prefetch={false}
+      className={cn(cls, op !== "tech" && "hover:text-foreground")}
+      title={title}
+    >
       {children}
     </Link>
   ) : (
@@ -209,7 +219,10 @@ export function TechChip({ id, link = true }) {
       aria-label={techSummary(id)}
     />
   ) : (
-    <button type="button" className={cn(monoLink, "cursor-default text-foreground hover:no-underline")} />
+    <button
+      type="button"
+      className={cn(monoLink, "cursor-default text-foreground hover:no-underline")}
+    />
   );
   return (
     <Tooltip>
@@ -281,7 +294,9 @@ export function PageHeader({ eyebrow, title, purpose, actions }) {
         <h1 className="m-0 text-2xl font-semibold tracking-[-0.01em] text-balance text-foreground">
           {title}
         </h1>
-        {purpose && <p className="mt-1 mb-0 max-w-[70ch] text-sm text-muted-foreground">{purpose}</p>}
+        {purpose && (
+          <p className="mt-1 mb-0 max-w-[70ch] text-sm text-muted-foreground">{purpose}</p>
+        )}
       </div>
       {actions && (
         <div className="page-actions flex min-w-0 flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
@@ -324,10 +339,7 @@ export function Card({ title, sub, right, children, flush, className }) {
           {children}
         </div>
       ) : (
-        <div
-          data-slot="card-content"
-          className={cn("min-w-0 px-5 pb-5", head ? "pt-1" : "pt-5")}
-        >
+        <div data-slot="card-content" className={cn("min-w-0 px-5 pb-5", head ? "pt-1" : "pt-5")}>
           {children}
         </div>
       )}
@@ -337,8 +349,7 @@ export function Card({ title, sub, right, children, flush, className }) {
 
 // "Nothing here" values render muted like 0 (tokens.md §9: zero is neutral).
 const EMPTY_VALUES = new Set(["0", "—", "-", "", "Not configured", "None"]);
-const isZero = (v) =>
-  v == null || v === 0 || (typeof v === "string" && EMPTY_VALUES.has(v.trim()));
+const isZero = (v) => v == null || v === 0 || (typeof v === "string" && EMPTY_VALUES.has(v.trim()));
 const pctFmt = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 
 /**
@@ -436,7 +447,9 @@ export function EmptyState({ icon: Icon = Inbox, title, children, action }) {
           {children}
         </p>
       )}
-      {action && <div className="mt-2 flex flex-wrap items-center justify-center gap-2">{action}</div>}
+      {action && (
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">{action}</div>
+      )}
     </div>
   );
 }
@@ -512,7 +525,10 @@ export function TableSkeleton({ rows = 5, cols = 4 }) {
       </div>
       {Array.from({ length: rows }).map((_, r) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder rows
-        <div key={r} className="flex h-11 items-center gap-4 border-b border-border px-5 last:border-b-0">
+        <div
+          key={r}
+          className="flex h-11 items-center gap-4 border-b border-border px-5 last:border-b-0"
+        >
           {Array.from({ length: cols }).map((_, c) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static placeholder cells
             <Skeleton key={c} h={12} w={widths[(c + r) % widths.length]} />
@@ -578,7 +594,11 @@ export function Field({ label, hint, error, children, htmlFor, id, className }) 
       </label>
       {control}
       {error ? (
-        <p id={msgId} role="alert" className="m-0 text-xs text-destructive [overflow-wrap:anywhere]">
+        <p
+          id={msgId}
+          role="alert"
+          className="m-0 text-xs text-destructive [overflow-wrap:anywhere]"
+        >
           {error}
         </p>
       ) : hint ? (

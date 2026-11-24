@@ -362,7 +362,9 @@ export default function Overview() {
                 name="Platform stream"
                 meta="GET /v1/stream"
                 tone={st.conn === "live" ? "ok" : st.conn === "demo" ? "info" : "warn"}
-                label={st.conn === "live" ? "Live" : st.conn === "demo" ? "Simulated" : "Connecting…"}
+                label={
+                  st.conn === "live" ? "Live" : st.conn === "demo" ? "Simulated" : "Connecting…"
+                }
                 pulse={st.conn === "live"}
               />
               {/* The narrator only explains; it never scores. Say plainly when no model is
@@ -416,7 +418,10 @@ function LeadIncident({ incident: i, onBlock }) {
           <p className="m-0 text-base text-pretty text-muted-foreground">{plainWhy(i)}</p>
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-2">
             <div className="flex flex-wrap gap-2">
-              <Button render={<Link href={`/incidents/${i.id}`} prefetch={false} />} nativeButton={false}>
+              <Button
+                render={<Link href={`/incidents/${i.id}`} prefetch={false} />}
+                nativeButton={false}
+              >
                 Investigate <ArrowRight aria-hidden />
               </Button>
               <Button variant="outline" onClick={onBlock}>
@@ -447,7 +452,10 @@ function LeadIncident({ incident: i, onBlock }) {
                     on ? "font-medium text-foreground" : "text-muted-foreground",
                   )}
                 >
-                  <Icon aria-hidden className={cn("size-4 shrink-0", on ? sev.icon : "text-muted-foreground")} />
+                  <Icon
+                    aria-hidden
+                    className={cn("size-4 shrink-0", on ? sev.icon : "text-muted-foreground")}
+                  />
                   {STAGE_LABEL[s]}
                   <span className="sr-only">{on ? "(reached)" : "(not reached)"}</span>
                 </li>
@@ -538,7 +546,6 @@ function ListSkeleton() {
   );
 }
 
-
 /* ───────── KPI trends ───────── */
 
 const HOUR = 3_600_000;
@@ -613,9 +620,7 @@ const MAX_SECONDARY = 3;
 const SENSOR_STATUS_ORDER = { online: 0, stale: 1, offline: 2 };
 const healthLabel = (status) =>
   status === "online" ? "Online" : status === "offline" ? "Offline" : "Stale";
-const healthTone = (status) =>
-  status === "online" ? "ok" : status === "offline" ? "bad" : "warn";
-
+const healthTone = (status) => (status === "online" ? "ok" : status === "offline" ? "bad" : "warn");
 
 function groupSensors(sensors) {
   const groups = new Map();

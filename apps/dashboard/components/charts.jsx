@@ -148,13 +148,7 @@ export function ActivityArea({
             </linearGradient>
           </defs>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey="hour"
-            tick={tick}
-            axisLine={false}
-            tickLine={false}
-            interval={3}
-          />
+          <XAxis dataKey="hour" tick={tick} axisLine={false} tickLine={false} interval={3} />
           <YAxis
             tick={tick}
             axisLine={false}
@@ -232,13 +226,7 @@ export function RateArea({
             </linearGradient>
           </defs>
           <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
-          <XAxis
-            dataKey={xKey}
-            tick={tick}
-            axisLine={false}
-            tickLine={false}
-            interval={3}
-          />
+          <XAxis dataKey={xKey} tick={tick} axisLine={false} tickLine={false} interval={3} />
           <YAxis
             tick={tick}
             axisLine={false}

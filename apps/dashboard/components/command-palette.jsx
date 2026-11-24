@@ -1,5 +1,4 @@
 "use client";
-import { Kbd } from "@/components/ui/kbd";
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
 import { Ban, CornerDownLeft, FlaskConical, Moon, Search, ShieldAlert, Sun } from "lucide-react";
 import Link from "next/link";
@@ -7,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Dialog, DialogOverlay, DialogPortal, DialogTitle } from "@/components/ui/dialog";
+import { Kbd } from "@/components/ui/kbd";
 import { cn } from "@/lib/utils";
 import { api, PROJECT } from "../lib/core";
 import { NAV_ITEMS } from "../lib/nav";
@@ -41,7 +41,9 @@ function isEditable(el) {
   if (tag === "TEXTAREA" || tag === "SELECT") return true;
   if (tag !== "INPUT") return false;
   const type = (el.getAttribute("type") || "text").toLowerCase();
-  return !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file"].includes(type);
+  return !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file"].includes(
+    type,
+  );
 }
 
 /**
@@ -111,7 +113,11 @@ export function CommandPalette({ open, onOpenChange, returnFocusRef }) {
 
   const groups = useMemo(() => {
     const pages = NAV_ITEMS.filter(
-      (p) => !q || norm(p.label).includes(q) || norm(p.keywords).includes(q) || norm(p.group).includes(q),
+      (p) =>
+        !q ||
+        norm(p.label).includes(q) ||
+        norm(p.keywords).includes(q) ||
+        norm(p.group).includes(q),
     ).map((p) => ({
       key: `page:${p.href}`,
       kind: "link",
@@ -249,7 +255,12 @@ export function CommandPalette({ open, onOpenChange, returnFocusRef }) {
             <Kbd className="hidden sm:inline-flex">esc</Kbd>
           </div>
 
-          <div id={listId} role="listbox" aria-label="Results" className="min-h-0 flex-1 overflow-y-auto p-2">
+          <div
+            id={listId}
+            role="listbox"
+            aria-label="Results"
+            className="min-h-0 flex-1 overflow-y-auto p-2"
+          >
             {flat.length === 0 ? (
               <p className="m-0 px-3 py-8 text-center text-sm text-muted-foreground">
                 No results for “{query.trim()}”
@@ -258,7 +269,12 @@ export function CommandPalette({ open, onOpenChange, returnFocusRef }) {
               groups.map((g) => {
                 const headingId = `${baseId}-${g.heading}`;
                 return (
-                  <div key={g.heading} role="group" aria-labelledby={headingId} className="pb-1 not-first:pt-2">
+                  <div
+                    key={g.heading}
+                    role="group"
+                    aria-labelledby={headingId}
+                    className="pb-1 not-first:pt-2"
+                  >
                     <div id={headingId} className="px-2 pb-1 text-xs font-medium text-faint">
                       {g.heading}
                     </div>
@@ -317,14 +333,18 @@ function Option({ id, item, active, onHover, onRun, onNavigate }) {
       <span className="shrink-0 text-muted-foreground tabular-nums">#{inc.number}</span>
       <span className="min-w-0 flex-1 truncate">{inc.title}</span>
       {inc.src_ip ? (
-        <span className="shrink-0 font-mono text-xs text-muted-foreground max-sm:hidden">{inc.src_ip}</span>
+        <span className="shrink-0 font-mono text-xs text-muted-foreground max-sm:hidden">
+          {inc.src_ip}
+        </span>
       ) : null}
     </>
   ) : (
     <>
       <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{item.label}</span>
-      {item.hint ? <span className="shrink-0 text-xs text-muted-foreground max-sm:hidden">{item.hint}</span> : null}
+      {item.hint ? (
+        <span className="shrink-0 text-xs text-muted-foreground max-sm:hidden">{item.hint}</span>
+      ) : null}
     </>
   );
   const enter = active ? (

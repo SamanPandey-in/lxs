@@ -24,7 +24,13 @@ function Table({ className, inset = false, ...props }) {
 }
 
 function TableHeader({ className, ...props }) {
-  return <thead data-slot="table-header" className={cn("bg-muted/60 [&_tr]:border-b", className)} {...props} />;
+  return (
+    <thead
+      data-slot="table-header"
+      className={cn("bg-muted/60 [&_tr]:border-b", className)}
+      {...props}
+    />
+  );
 }
 
 function TableBody({ className, ...props }) {

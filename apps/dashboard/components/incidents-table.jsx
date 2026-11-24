@@ -48,7 +48,10 @@ function MetaLine({ i, className }) {
         </Badge>
       ))}
       {rest.length ? (
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={rest.join(", ")}>
+        <span
+          className="shrink-0 text-xs text-muted-foreground tabular-nums"
+          title={rest.join(", ")}
+        >
           +{rest.length}
         </span>
       ) : null}
@@ -62,9 +65,7 @@ export function QueueTable({ incidents }) {
     <Table inset className="table-auto">
       <TableHeader>
         <TableRow className="hover:bg-transparent">
-          <TableHead scope="col">
-            Severity
-          </TableHead>
+          <TableHead scope="col">Severity</TableHead>
           <TableHead scope="col" className="text-right">
             Score
           </TableHead>
@@ -80,21 +81,18 @@ export function QueueTable({ incidents }) {
           <TableHead scope="col" className="hidden lg:table-cell">
             Last activity
           </TableHead>
-          <TableHead scope="col">
-            Status
-          </TableHead>
+          <TableHead scope="col">Status</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {incidents.map((i) => (
-          <TableRow
-            key={i.id}
-            className="relative h-14 has-[a:focus-visible]:bg-muted/50"
-          >
+          <TableRow key={i.id} className="relative h-14 has-[a:focus-visible]:bg-muted/50">
             <TableCell>
               <SeverityPill severity={i.severity} />
             </TableCell>
-            <TableCell className="text-right text-muted-foreground tabular-nums">{i.score}</TableCell>
+            <TableCell className="text-right text-muted-foreground tabular-nums">
+              {i.score}
+            </TableCell>
             <TableCell className="max-w-0">
               <Link
                 href={`/incidents/${i.id}`}

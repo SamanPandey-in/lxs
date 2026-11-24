@@ -95,7 +95,9 @@ function BlockRow({ b, onUnblock }) {
           <>
             <span
               className={
-                b.refused_count ? "block font-medium text-foreground" : "block text-muted-foreground"
+                b.refused_count
+                  ? "block font-medium text-foreground"
+                  : "block text-muted-foreground"
               }
             >
               {fmtNum(b.refused_count)}

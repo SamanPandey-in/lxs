@@ -2,7 +2,9 @@
 # ds-agent: the only container that holds the platform key. Build context: the monorepo root.
 #   docker build -f images/agent.Dockerfile -t ghcr.io/lxs/agent:0.1.0 .
 
-FROM node:22-alpine AS build
+# The build stage emits one self-contained JS bundle (tsup, noExternal), which is architecture-independent,
+# so it runs on the build host natively. Multi-arch builds then avoid running pnpm and esbuild under QEMU.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 RUN corepack enable
 WORKDIR /repo
 COPY pnpm-workspace.yaml package.json tsconfig.base.json ./

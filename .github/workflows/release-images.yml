@@ -1,0 +1,198 @@
+# Build, push and sign the five sensor images that the generated lxs.compose.yml pulls.
+#
+#   agent            images/agent.Dockerfile
+#   decoy-web        images/decoy-web.Dockerfile
+#   cowrie-personas  images/cowrie-personas.Dockerfile
+#   decoy-redis      images/redis-decoy.Dockerfile
+#   decoy-postgres   images/postgres-decoy.Dockerfile
+#
+# images/api.Dockerfile (the platform) is deliberately not published here: it is not part of the
+# customer-side stack and gets its own deploy workflow (Phase 2, stream H).
+#
+# Tags: <version> and, for non-prerelease versions, `latest`. <version> is the SDK version from
+# sdk/lxs/package.json, which is exactly what the generated compose uses (sdk/lxs/src/version.ts:
+# IMAGE_TAG = SDK_VERSION). A release tag `v0.1.0` must therefore match `"version": "0.1.0"`.
+#
+# Pushing happens only when the workflow runs on a tag ref (a `v*` push, or a manual run started
+# from a tag). A manual run from a branch builds both architectures and pushes nothing (dry run).
+#
+# IMPORTANT: IMAGE_NAMESPACE must match the default baked into the generated compose. Today
+# sdk/lxs/src/generate/compose.ts defaults to `ghcr.io/lxs/...`. This workflow defaults to
+# `ghcr.io/<repository owner>`. Either publish from an org/user called `lxs` (and own that GHCR
+# namespace), set the repository variable IMAGE_NAMESPACE to `ghcr.io/lxs`, or change compose.ts
+# to the namespace you actually publish to. If they differ, `docker compose up` pulls images that
+# do not exist unless users export LXS_*_IMAGE overrides.
+name: Release images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Override with a repository variable (Settings -> Variables -> IMAGE_NAMESPACE), e.g. ghcr.io/lxs.
+  IMAGE_NAMESPACE: ${{ vars.IMAGE_NAMESPACE || format('ghcr.io/{0}', github.repository_owner) }}
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      push: ${{ steps.v.outputs.push }}
+      namespace: ${{ steps.v.outputs.namespace }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Read the SDK version and check it against the tag and version.ts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./sdk/lxs/package.json').version")"
+          ts_version="$(sed -n "s/^export const SDK_VERSION = '\(.*\)';$/\1/p" sdk/lxs/src/version.ts)"
+          if [[ "$version" != "$ts_version" ]]; then
+            echo "::error::sdk/lxs/package.json ($version) and sdk/lxs/src/version.ts ($ts_version) disagree"
+            exit 1
+          fi
+          push=false
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [[ "$tag" != "$version" ]]; then
+              echo "::error::tag ${GITHUB_REF_NAME} does not match SDK version $version; the generated compose would pull a tag that is never published"
+              exit 1
+            fi
+            push=true
+          fi
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
+          # GHCR repository names must be lowercase; repository_owner may not be.
+          namespace="$(echo "${IMAGE_NAMESPACE}" | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "push=$push"
+            echo "namespace=$namespace"
+          } >> "$GITHUB_OUTPUT"
+          echo "version=$version prerelease=$prerelease push=$push namespace=$namespace"
+          if [[ "$namespace" != "ghcr.io/lxs" ]]; then
+            echo "::warning::Publishing to $namespace, but sdk/lxs/src/generate/compose.ts defaults to ghcr.io/lxs. Users must export LXS_*_IMAGE overrides until they match."
+          fi
+
+  build:
+    name: ${{ matrix.image }}
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write # push to GHCR with GITHUB_TOKEN
+      id-token: write # keyless cosign signing and build provenance (OIDC)
+      attestations: write # GitHub artifact attestations
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: agent
+            dockerfile: images/agent.Dockerfile
+          - image: decoy-web
+            dockerfile: images/decoy-web.Dockerfile
+          - image: cowrie-personas
+            dockerfile: images/cowrie-personas.Dockerfile
+          - image: decoy-redis
+            dockerfile: images/redis-decoy.Dockerfile
+          - image: decoy-postgres
+            dockerfile: images/postgres-decoy.Dockerfile
+    env:
+      IMAGE: ${{ needs.version.outputs.namespace }}/${{ matrix.image }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PUSH: ${{ needs.version.outputs.push }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ needs.version.outputs.prerelease != 'true' }}
+          labels: |
+            org.opencontainers.image.version=${{ env.VERSION }}
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ env.PLATFORMS }}
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # SLSA provenance and an SPDX SBOM, attached to the image index as in-toto attestations.
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+      - uses: sigstore/cosign-installer@v3
+        if: env.PUSH == 'true'
+
+      - name: Sign with cosign (keyless, GitHub OIDC)
+        if: env.PUSH == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest build provenance (GitHub attestations)
+        if: env.PUSH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify the signature
+        if: env.PUSH == 'true'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "${{ github.server_url }}/${{ github.workflow_ref }}" > /dev/null
+          echo "verified ${IMAGE}@${DIGEST}"
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo "### ${IMAGE}"
+            echo ""
+            echo "- platforms: ${PLATFORMS}"
+            echo "- tags: $(echo '${{ steps.meta.outputs.tags }}' | tr '\n' ' ')"
+            echo "- digest: \`${DIGEST}\`"
+            echo "- pushed and signed: ${PUSH}"
+          } >> "$GITHUB_STEP_SUMMARY"
