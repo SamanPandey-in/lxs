@@ -18,6 +18,7 @@ import { systemRoutes } from './modules/system.js';
 import authSession, { isAllowedOrigin } from './plugins/auth-session.js';
 import bearerKey from './plugins/bearer-key.js';
 import errorHandler from './plugins/error-handler.js';
+import metrics from './plugins/metrics.js';
 import rateLimit from './plugins/rate-limit.js';
 import { registerStreamRoute } from './plugins/sse.js';
 
@@ -30,6 +31,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(errorHandler);
+  await app.register(metrics); // GET /metrics + HTTP duration hook
   await app.register(cors, {
     origin: (origin, cb) => cb(null, !origin || isAllowedOrigin(origin)),
     credentials: true,

@@ -11,6 +11,7 @@ import {
   setInProcessNotifier,
   setInProcessProcessor,
 } from '../jobs/queue.js';
+import { timeJob } from '../plugins/metrics.js';
 import { assessIncident } from './assess-incident.js';
 import { loadDetection } from './detection.js';
 import { autoCloseNoise, blocklistExpiry, retentionPurge, sensorStaleness } from './maintenance.js';
@@ -46,24 +47,32 @@ export async function startWorker(log: FastifyBaseLogger): Promise<void> {
   if (boss) {
     await boss.work<ProcessEventsJob>(QUEUES.processEvents, { batchSize: 4 }, async (jobs) => {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
-        await processEvents((j as { data: ProcessEventsJob }).data);
+        await timeJob(QUEUES.processEvents, () =>
+          processEvents((j as { data: ProcessEventsJob }).data),
+        );
     });
     await boss.work<NarrateIncidentJob>(QUEUES.narrateIncident, async (jobs) => {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
-        await narrateIncident((j as { data: NarrateIncidentJob }).data.incidentId);
+        await timeJob(QUEUES.narrateIncident, () =>
+          narrateIncident((j as { data: NarrateIncidentJob }).data.incidentId),
+        );
     });
     await boss.work<AssessIncidentJob>(QUEUES.assessIncident, async (jobs) => {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
-        await assessIncident((j as { data: AssessIncidentJob }).data.incidentId);
+        await timeJob(QUEUES.assessIncident, () =>
+          assessIncident((j as { data: AssessIncidentJob }).data.incidentId),
+        );
     });
     await boss.work<NotifyIncidentJob>(QUEUES.notifyIncident, async (jobs) => {
       for (const j of Array.isArray(jobs) ? jobs : [jobs])
-        await notifyIncident((j as { data: NotifyIncidentJob }).data.incidentId);
+        await timeJob(QUEUES.notifyIncident, () =>
+          notifyIncident((j as { data: NotifyIncidentJob }).data.incidentId),
+        );
     });
     const cron = async (queue: string, expr: string, fn: () => Promise<unknown>) => {
       await boss.schedule(queue, expr);
       await boss.work(queue, async () => {
-        await fn();
+        await timeJob(queue, fn);
       });
     };
     await cron(QUEUES.sweep, '* * * * *', () => processEvents({}));

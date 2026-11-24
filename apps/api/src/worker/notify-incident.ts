@@ -2,6 +2,7 @@ import { and, sql as dsql, eq, gt, inArray, ne, or } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import {
   attackers,
+  events,
   incidents,
   notificationChannels,
   notificationDeliveries,
@@ -19,6 +20,7 @@ import {
   sendToChannel,
 } from '../lib/alert-delivery.js';
 import { decryptSecret } from '../lib/channel-crypto.js';
+import { notificationDeliveries as deliveryMetric } from '../plugins/metrics.js';
 
 type ChannelRow = typeof notificationChannels.$inferSelect;
 
@@ -105,12 +107,16 @@ export async function notifyIncident(incidentId: string): Promise<NotifyOutcome>
       honeytokenUsed: incidents.honeytokenUsed,
       openedAt: incidents.openedAt,
       srcIp: attackers.ip,
+      // Onboarding sample data is canned and loaded in bulk: never page for it. Test hits and
+      // demo replays still alert, so a user can check their channel end to end.
+      sample: dsql<boolean>`exists(select 1 from ${events} e where e.incident_id = ${incidents.id} and e.sample)`,
     })
     .from(incidents)
     .innerJoin(attackers, eq(attackers.id, incidents.attackerId))
     .where(eq(incidents.id, incidentId))
     .limit(1);
   if (!inc || (inc.status !== 'open' && inc.status !== 'acknowledged')) return out;
+  if (inc.sample) return out;
 
   const channels = await db
     .select()
@@ -235,6 +241,7 @@ export async function notifyIncident(incidentId: string): Promise<NotifyOutcome>
         ? formatSlack(alert, env.DASHBOARD_URL)
         : formatWebhook(alert, env.DASHBOARD_URL, inc.projectId);
     const r = await sendChannelPayload(c, payload);
+    deliveryMetric.inc({ channel_type: c.type, status: r.delivered ? 'ok' : 'failed' }); // metrics
     await recordResult(c.id, claim.deliveryId, r);
     if (r.delivered) out.sent++;
     else {

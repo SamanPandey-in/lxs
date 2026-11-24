@@ -27,6 +27,12 @@ export interface AssessIncidentJob {
 export interface ProcessEventsJob {
   projectId?: string;
   eventIds?: string[];
+  /**
+   * Coalesced form: process every pending event of one source in one project. Set together
+   * with `projectId` by `enqueueProcessSources`; the job reads what is pending when it runs,
+   * so events that arrived after it was queued are picked up without a job of their own.
+   */
+  srcIp?: string;
 }
 
 let boss: PgBoss | null = null;
@@ -93,6 +99,75 @@ export async function enqueueProcessEvents(job: ProcessEventsJob): Promise<void>
   if (inProcess) {
     const fn = inProcess;
     setImmediate(() => void fn(job).catch(() => {}));
+  }
+}
+
+/**
+ * Coalescing window for per-source processing (G5). pg-boss debounce semantics: the first
+ * send in a window runs at once, a second send in the same window is moved to the start of
+ * the next window, and further sends in that window are dropped because the queued job has
+ * not started yet and will read their events anyway. So a burst of N ingest calls costs
+ * about (burst seconds / window) + 1 jobs instead of N.
+ */
+export const PROCESS_COALESCE_SECONDS = 1;
+/** Above this many distinct sources in one batch, fall back to one id-scoped job (a sweep-sized scan). */
+export const MAX_SOURCE_JOBS_PER_BATCH = 25;
+
+export const processSourceKey = (projectId: string, srcIp: string): string =>
+  `${projectId}|ip:${srcIp}`;
+
+const sourceTimers = new Map<string, NodeJS.Timeout>();
+
+/**
+ * Enqueue coalesced processing for the sources of a freshly stored batch: one pg-boss
+ * singleton per (project, source) with a short debounce. Batches spanning many sources keep
+ * the old id-scoped job so one scanner-heavy batch does not fan out into hundreds of sends.
+ */
+export async function enqueueProcessSources(
+  projectId: string,
+  inserted: { id: string; srcIp: string }[],
+): Promise<void> {
+  if (inserted.length === 0) return;
+  const sources = [...new Set(inserted.map((r) => r.srcIp))];
+  if (sources.length > MAX_SOURCE_JOBS_PER_BATCH) {
+    await enqueueProcessEvents({ projectId, eventIds: inserted.map((r) => r.id) });
+    return;
+  }
+  for (const srcIp of sources) await enqueueProcessSource(projectId, srcIp);
+}
+
+async function enqueueProcessSource(projectId: string, srcIp: string): Promise<void> {
+  const key = processSourceKey(projectId, srcIp);
+  const job: ProcessEventsJob = { projectId, srcIp };
+  const b = getBoss();
+  if (b) {
+    try {
+      // A null id means "coalesced into the job already queued for the next window".
+      await b.send(QUEUES.processEvents, job as object, {
+        singletonKey: key,
+        singletonSeconds: PROCESS_COALESCE_SECONDS,
+        singletonNextSlot: true,
+        retryLimit: 5,
+        retryBackoff: true,
+        retryDelay: 2,
+      });
+      return;
+    } catch {
+      /* fall through to in-process */
+    }
+  }
+  // In-process: one pending timer per source. The key is cleared when the timer fires, so
+  // events arriving while that run is in flight schedule the next one (the advisory lock in
+  // processGroup serialises the two).
+  if (inProcess && !sourceTimers.has(key)) {
+    const fn = inProcess;
+    sourceTimers.set(
+      key,
+      setTimeout(() => {
+        sourceTimers.delete(key);
+        void fn(job).catch(() => {});
+      }, PROCESS_COALESCE_SECONDS * 250),
+    );
   }
 }
 

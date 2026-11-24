@@ -1,0 +1,193 @@
+# Deploy the platform API (G8 / Phase 2 stream H).
+#
+#   build   images/api.Dockerfile -> registry, tagged with the commit SHA (+ the deploy tag)
+#   deploy  GitHub environment `production` (add required reviewers there for manual approval),
+#           then scripts/deploy/deploy.sh: one-off migrations, restart, readiness check
+#
+# Triggers: a `deploy-*` tag push (e.g. deploy-2026-11-23.1), or a manual run.
+#
+# The dashboard is not built here: there is no dashboard Dockerfile yet (apps/dashboard is
+# deployed separately; see docs/OPERATIONS.md).
+#
+# Configuration (Settings -> Secrets and variables -> Actions; environment-scoped where noted).
+# Nothing secret lives in this file or the repo.
+#   vars.API_IMAGE              image repo without tag. Default ghcr.io/<owner>/lxs-api.
+#                               For ECR: <acct>.dkr.ecr.<region>.amazonaws.com/lxs-api
+#   vars.AWS_REGION             needed for ECR and the ecs target
+#   vars.AWS_ROLE_ARN           IAM role trusted for this repo via GitHub OIDC (ECR push, ECS deploy)
+#   vars.DEPLOY_TARGET          ssh (default) | ecs (ecs is a TODO in deploy.sh)
+#   production environment:
+#     vars.DEPLOY_HOST, vars.DEPLOY_USER, vars.DEPLOY_PATH, vars.DEPLOY_COMPOSE_FILE
+#     vars.ECS_CLUSTER, vars.ECS_SERVICE             (ecs target)
+#     secrets.DEPLOY_SSH_KEY                          private key for DEPLOY_USER (ssh target)
+#     secrets.DEPLOY_SSH_KNOWN_HOSTS                  `ssh-keyscan -H <host>` output, verified by hand
+name: Deploy
+
+on:
+  push:
+    tags: ['deploy-*']
+  workflow_dispatch:
+    inputs:
+      skip_build:
+        description: Redeploy an existing image instead of building (set image below)
+        type: boolean
+        default: false
+      image:
+        description: Full image reference to deploy when skip_build is set (repo@sha256:... or repo:tag)
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  API_IMAGE: ${{ vars.API_IMAGE || format('ghcr.io/{0}/lxs-api', github.repository_owner) }}
+
+jobs:
+  build:
+    name: Build and push API image
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_build) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write # GHCR push with GITHUB_TOKEN
+      id-token: write # AWS OIDC (ECR)
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image repository
+        id: repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$(echo "${API_IMAGE}" | tr '[:upper:]' '[:lower:]')"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          if [[ "$repo" == *.dkr.ecr.*.amazonaws.com/* ]]; then echo "ecr=true" >> "$GITHUB_OUTPUT"; else echo "ecr=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        if: steps.repo.outputs.ecr == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to ECR
+        if: steps.repo.outputs.ecr == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Log in to GHCR
+        if: steps.repo.outputs.ecr != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.repo.outputs.repo }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=tag
+
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: images/api.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - id: ref
+        name: Pin the digest
+        shell: bash
+        env:
+          REPO: ${{ steps.repo.outputs.repo }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "image=${REPO}@${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "### API image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${REPO}@${DIGEST}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Migrate and restart (production)
+    needs: build
+    # Run after a successful build, or alone when a manual run skips the build.
+    if: ${{ always() && (needs.build.result == 'success' || (needs.build.result == 'skipped' && inputs.skip_build && inputs.image != '')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+    permissions:
+      contents: read
+      id-token: write # AWS OIDC (ecs target, or ECR pulls through the host role are host-side)
+    env:
+      IMAGE: ${{ needs.build.outputs.image || inputs.image }}
+      DEPLOY_TARGET: ${{ vars.DEPLOY_TARGET || 'ssh' }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_COMPOSE_FILE: ${{ vars.DEPLOY_COMPOSE_FILE }}
+      ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+      ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        if: env.DEPLOY_TARGET == 'ecs'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install SSH key and known_hosts
+        if: env.DEPLOY_TARGET == 'ssh'
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SSH_KEY" || -z "$KNOWN_HOSTS" ]]; then
+            echo "::error::DEPLOY_SSH_KEY and DEPLOY_SSH_KNOWN_HOSTS must be set on the production environment"
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/deploy_known_hosts
+          echo "DEPLOY_SSH_KEY_FILE=$HOME/.ssh/deploy_key" >> "$GITHUB_ENV"
+          echo "DEPLOY_KNOWN_HOSTS_FILE=$HOME/.ssh/deploy_known_hosts" >> "$GITHUB_ENV"
+
+      - name: Deploy
+        shell: bash
+        run: bash scripts/deploy/deploy.sh
+
+      - name: Remove SSH key
+        if: always() && env.DEPLOY_TARGET == 'ssh'
+        run: rm -f ~/.ssh/deploy_key
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Deployed"
+            echo "- image: \`${IMAGE}\`"
+            echo "- target: ${DEPLOY_TARGET}"
+          } >> "$GITHUB_STEP_SUMMARY"

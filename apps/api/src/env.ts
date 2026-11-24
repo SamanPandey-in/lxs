@@ -77,6 +77,8 @@ const EnvSchema = z.object({
   MAX_PROJECTS_PER_ORG: z.coerce.number().int().positive().default(5),
   MAX_KEYS_PER_ORG: z.coerce.number().int().positive().default(10),
   SIGNUP_RATE_PER_HOUR: z.coerce.number().int().positive().default(10),
+  // Bearer token for GET /metrics. Unset: open in dev/test, disabled (404) in production.
+  METRICS_TOKEN: z.string().min(16).optional(),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

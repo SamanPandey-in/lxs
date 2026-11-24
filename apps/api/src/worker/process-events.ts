@@ -11,6 +11,7 @@ import {
 import { sha256hex } from '../lib/crypto.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
+import { detectionLatency } from '../plugins/metrics.js';
 import {
   type ChainResult,
   commonCredentials,
@@ -24,6 +25,8 @@ import { computeUncovered, needsAssessment } from './uncovered.js';
 const INACTIVITY_MS = 24 * 3600 * 1000;
 const MAX_PER_RUN = 5000;
 const CHAIN_LIMIT = 5000;
+/** A coalesced (per-source) job drains at most this many MAX_PER_RUN rounds before leaving the rest to the sweep. */
+const MAX_ROUNDS = 4;
 
 type EventRow = typeof events.$inferSelect;
 
@@ -75,9 +78,30 @@ async function loadCriticalAssets(tx: Tx, projectId: string): Promise<string[]> 
 export async function processEvents(
   job: ProcessEventsJob = {},
 ): Promise<{ processed: number; groups: number }> {
+  // Coalesced per-source jobs (G5) read whatever is pending for that source when they run.
+  // A burst larger than one run is drained here rather than waiting for the next sweep.
+  if (job.srcIp && job.projectId && !job.eventIds?.length) {
+    let processed = 0;
+    let groups = 0;
+    for (let round = 0; round < MAX_ROUNDS; round++) {
+      const r = await processPending(job);
+      processed += r.processed;
+      groups += r.groups;
+      if (r.fetched < MAX_PER_RUN) break;
+    }
+    return { processed, groups };
+  }
+  const { processed, groups } = await processPending(job);
+  return { processed, groups };
+}
+
+async function processPending(
+  job: ProcessEventsJob,
+): Promise<{ processed: number; groups: number; fetched: number }> {
   const filters = [isNull(events.processedAt)];
   if (job.eventIds?.length) filters.push(inArray(events.id, job.eventIds));
   if (job.projectId) filters.push(eq(events.projectId, job.projectId));
+  if (job.srcIp) filters.push(eq(events.srcIp, job.srcIp));
 
   const pending = await db
     .select({ id: events.id, projectId: events.projectId, srcIp: events.srcIp })
@@ -85,7 +109,8 @@ export async function processEvents(
     .where(and(...filters))
     .orderBy(asc(events.occurredAt))
     .limit(MAX_PER_RUN);
-  if (pending.length === 0) return { processed: 0, groups: 0 };
+  // Nothing new since the last scored event for this source: no chain read at all.
+  if (pending.length === 0) return { processed: 0, groups: 0, fetched: 0 };
 
   const groups = new Map<string, { projectId: string; srcIp: string; ids: string[] }>();
   for (const p of pending) {
@@ -99,8 +124,15 @@ export async function processEvents(
   let firstError: unknown;
   for (const g of groups.values()) {
     try {
-      const { count, incidentId, assess } = await processGroup(g.projectId, g.srcIp, g.ids);
+      const { count, incidentId, assess, oldestReceivedAt } = await processGroup(
+        g.projectId,
+        g.srcIp,
+        g.ids,
+      );
       processed += count;
+      // metrics: ingest -> incident written (committed), measured from the oldest event in the batch.
+      if (incidentId && oldestReceivedAt)
+        detectionLatency.observe((Date.now() - oldestReceivedAt.getTime()) / 1000);
       // After commit, so a slow narrator can never hold up or roll back a verdict.
       // Queue every new incident even when this API process lacks provider config.
       // In split API/worker deployments the worker may own the LLM credentials.
@@ -113,14 +145,19 @@ export async function processEvents(
     }
   }
   if (firstError) throw firstError; // let pg-boss retry; processed rows are already committed
-  return { processed, groups: groups.size };
+  return { processed, groups: groups.size, fetched: pending.length };
 }
 
 async function processGroup(
   projectId: string,
   srcIp: string,
   ids: string[],
-): Promise<{ count: number; incidentId: string | null; assess?: boolean }> {
+): Promise<{
+  count: number;
+  incidentId: string | null;
+  assess?: boolean;
+  oldestReceivedAt?: Date;
+}> {
   const det = await loadDetection();
   const entityKey = `ip:${srcIp}`;
 
@@ -322,25 +359,13 @@ async function processGroup(
     `);
 
     // Evaluate the whole chain (pure, deterministic).
-    const chainRows = await tx
-      .select()
-      .from(events)
-      .where(eq(events.incidentId, incidentId))
-      .orderBy(asc(events.occurredAt), asc(events.id))
-      .limit(CHAIN_LIMIT);
-    const existingRows = await tx
-      .select()
-      .from(detections)
-      .where(eq(detections.incidentId, incidentId));
-    const existing: Detection[] = existingRows.map((d) => ({
-      rule_id: d.ruleId,
-      points: d.points,
-      reason: d.reason,
-      techniques: d.techniques as Detection['techniques'],
-      stage: d.stage as Detection['stage'],
-      floor: d.floor as Detection['floor'],
-      evidence_event_ids: d.evidenceEventIds,
-    }));
+    //
+    // G5: this used to re-select `events where incident_id = <new incident>` and its (empty)
+    // detections. The incident was created a few statements above in this transaction, so
+    // its events are exactly priorRows + rows, both already in memory; buildIncidentChain
+    // reproduces that query's order, limit and post-update techniques without the read.
+    const chainRows = buildIncidentChain(priorRows, rows, tagged);
+    const existing: Detection[] = []; // a brand-new incident has no stored detections
     const chainEvents = chainRows.map(toDecoyEvent);
     const verdict = det.evaluateChain(chainEvents, {
       ...baseCtx,
@@ -365,8 +390,7 @@ async function processGroup(
         events: chainEvents,
       });
 
-    // Replace detections.
-    await tx.delete(detections).where(eq(detections.incidentId, incidentId));
+    // Write detections (the incident is new, so there is nothing to replace).
     const seen = new Set<string>();
     const detRows = verdict.detections
       .filter((d) => {
@@ -491,8 +515,38 @@ async function processGroup(
     });
     await notify('incident.ai', { id: incidentId, status: assess ? 'generating' : 'fallback' });
 
-    return { count: rows.length, incidentId, assess };
+    return {
+      count: rows.length,
+      incidentId,
+      assess,
+      oldestReceivedAt: rows.reduce(
+        (m, r) => (r.receivedAt < m ? r.receivedAt : m),
+        rows[0]!.receivedAt,
+      ),
+    };
   });
+}
+
+/**
+ * The rows `select * from events where incident_id = $new order by occurred_at, id limit
+ * CHAIN_LIMIT` would return right after the attach statements: retained prior rows as stored,
+ * plus this batch with the techniques the attach UPDATE just wrote. Every event row is written
+ * from a JS Date (millisecond precision), so ordering by (getTime, id) matches Postgres
+ * ordering by (timestamptz, uuid); uuid order equals lowercase-hex string order.
+ */
+export function buildIncidentChain(
+  priorRows: EventRow[],
+  rows: EventRow[],
+  tagged: { row: EventRow; tag: { techniques: { id: string }[] } }[],
+): EventRow[] {
+  const techs = new Map(tagged.map((t) => [t.row.id, t.tag.techniques.map((x) => x.id)]));
+  const batch = rows.map((r) => ({ ...r, techniques: techs.get(r.id) ?? r.techniques }));
+  return [...priorRows, ...batch]
+    .sort(
+      (a, b) =>
+        a.occurredAt.getTime() - b.occurredAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    )
+    .slice(0, CHAIN_LIMIT);
 }
 
 /**

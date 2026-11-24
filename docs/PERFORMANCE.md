@@ -161,6 +161,8 @@ short. It will hurt with a long-running attacker or a busy sensor.
 **Effort:** ~1.5 hours. **Gain:** removes the quadratic; keeps burst latency ~1 s as chains
 grow.
 
+**Status: done (Phase 2, stream H).** See "Results of item 5" below.
+
 ---
 
 ### 6. The ~30 ms floor on every API call — leave it alone
@@ -185,7 +187,7 @@ is healthy.
 | 2 | Demo serves a production build (#1) | **Done** |
 | 3 | `prefetch={false}` on nav, rows, chips, matrix cells (#4) | **Done** |
 | 4 | SSE-aware polling (#3) | **Done** |
-| 5 | Coalesce worker jobs per attacker (#5) | Not started — ~1.5 h |
+| 5 | Coalesce worker jobs per attacker (#5) | **Done** |
 
 ---
 
@@ -229,11 +231,47 @@ the second watched the incident queue, which defaults to the Targeted tab while 
 produces an opportunistic incident. Worth recording, because a test that lies about a
 regression is worse than no test.
 
-### What is left
+## Results of item 5
 
-Only item 5. The worker still re-reads an attacker's full history on every ingest call,
-which is O(n²) in chain length. It is invisible today and will not be felt until chains
-get long or a sensor gets busy.
+Measured on 2026-11-23 with `scripts/perf/chain5k.mjs`: one source, 5,000 events (auth failures
+plus a command every 25th event) sent as **100 sequential POSTs of 50**. Both builds ran
+`ROLE=all` on the host against the same scratch Postgres 16 container (migrated and seeded, not
+the shared dev DB), no LLM key. "Before" is `main` at `bb020ce`; "after" is stream H.
+
+| Measure | before (5 runs) | after (4 runs) |
+|---|---|---|
+| `process-events` jobs for the burst | **100** | **7–11** |
+| Events drained (all processed) after first POST | 24.5–53.8 s | **5.5–9.8 s** |
+| Queue empty after first POST | ~50 s (1 clean run) | **6.8–8.6 s** (2 runs) |
+| Worker busy on those jobs (union of job intervals; /metrics for the first after run) | 6.2–11.0 s (2 complete runs) | **1.6–3.8 s** |
+| Incidents opened for the source | 17–100 | 5–10 |
+
+Ranges, not single numbers: the probe and its "queue empty" and "busy" columns were added
+part-way through, so not every run has every column. `/metrics` agreed with the job table on
+the after runs (`lxs_worker_job_duration_seconds` delta 1.54–2.38 s vs 1.57–2.41 s busy).
+
+How to read it:
+
+- **Job count is the structural fix.** Before, every POST became a job and pg-boss fetches 4
+  every ~2 s, so a 100-call burst queued for ~50 s. The spread in the "before" drain time is
+  the once-a-minute sweep (`processEvents({})`) landing mid-burst and draining whatever was
+  left in one pass; the 53.8 s run had no sweep help. After, ingest sends one pg-boss singleton
+  per `(project, source)` with a 1 s debounce window (`singletonNextSlot`), and the job reads
+  every pending event of that source when it runs, so the burst costs about one job per second
+  of arrival.
+- **Fewer incidents is a consequence, not a scoring change.** Each processed batch still opens
+  its own incident and is scored by the unchanged `evaluateChain` over the same bounded window
+  (prior unattached events of the source in 24 h + the batch). Coalescing makes the batches
+  bigger, as the sweep and in-process modes already did. Golden detection tests and the locked
+  demo sequence are unchanged.
+- **Removed redundant reads.** The re-select of the freshly created incident's events and its
+  (always empty) detections is gone; the chain is assembled in memory in the same
+  `occurred_at, id` order, with the same limit and post-update techniques.
+- **What is still re-read.** Rules need the whole chain (thresholds over windows, cadence,
+  pre/post real-asset labels), so scoring is not incremental. Each run still reads the source's
+  retained low-signal events in the 24 h window (bounded by `CHAIN_LIMIT`) and the attacker
+  rollup aggregates over its events. Coalescing turns that from once per ingest call into once
+  per debounce window, and a job that finds nothing pending returns after one indexed select.
 
 ## How to re-measure
 
@@ -243,7 +281,73 @@ The probes used here are reproducible:
 node scripts/perf/api.mjs <project-id>     # endpoint p50/p95 + detection latency
 node scripts/perf/web.mjs <base-url> <id>  # per-route TTFB / DOM-ready / wall
 node scripts/perf/burst.mjs <project-id>   # ingest -> settled score
+node scripts/perf/chain5k.mjs --project <id> --db <url>  # 5k-event single-source burst (G5)
 ```
 
 Re-run them after each change and record the numbers here. A performance claim without a
 before and after is a guess.
+
+## Middleware overhead
+
+The question: is the Node middleware slow enough that customers' apps would notice, and would a
+Go rewrite fix it? Measured on 2026-11-24 with the harness in `conformance/bench/`.
+
+**Machine caveat.** Windows 11 laptop, Intel i5-1135G7 (4 cores / 8 threads), Node 22.17, Go
+1.27.3. Other jobs were running on the machine during the runs, the load generator shares the CPU
+with the server under test, and repeated runs moved by 10 to 50 %. Read the numbers as orders of
+magnitude, not as a spec sheet. Linux CI hardware will give different absolutes.
+
+**Method.** A non-decoy route (`GET /api/products?page=2`, small JSON answer, no I/O) is served
+four ways: Go `net/http` bare, Go `net/http` behind `lxs.Handler`, Node Express bare, Node Express
+behind `t.express()`. The middleware has a realistic policy loaded from a fake agent: 1000 exact
+blocklist addresses, 50 blocklist CIDRs, a 2-entry allowlist, two decoys. The client is not on
+any list, so every request walks the full pass-through path (client IP, both allowlists, the
+blocklist, decoy matching, `x-ds-*` stripping).
+
+1. **End to end.** One Go load generator (`conformance/bench/go/cmd/load`, separate process,
+   autocannon-style closed loop) drives each server for 2 s warmup + 10 s measured with 8
+   keep-alive connections. Latency is timed with QueryPerformanceCounter on Windows (Go's
+   monotonic clock there ticks at ~0.5 ms). `conformance/bench/run.sh [duration] [connections]`
+   runs all four.
+2. **In process.** The middleware's own cost per request, no network: `go test -bench .` in
+   `conformance/bench/go` (`BenchmarkProcess` calls `Middleware.Process` on a reused request), and
+   `node conformance/bench/node/micro.mjs` (calls the Express middleware on a minimal request
+   object, minus the cost of building that object).
+
+### Results
+
+End to end, 8 connections, two runs:
+
+| Server | p50 | p99 | req/s |
+| --- | --- | --- | --- |
+| Go net/http, bare | 0.215 / 0.219 ms | 0.857 / 0.870 ms | 32.0k / 31.4k |
+| Go net/http + LXS | 0.226 / 0.244 ms | 0.939 / 1.023 ms | 29.3k / 28.0k |
+| Node Express, bare | 1.667 / 1.545 ms | 8.014 / 7.025 ms | 4.0k / 4.4k |
+| Node Express + LXS | 1.564 / 1.559 ms | 6.897 / 7.221 ms | 4.4k / 4.3k |
+
+In process, per request:
+
+| Middleware | Cost | Allocations |
+| --- | --- | --- |
+| Go `Process` | 0.46 to 0.64 µs | 0 |
+| Node `express()` middleware | 5.4 to 10.8 µs (2.1 µs with no blocklist CIDRs) | n/a |
+
+A single-connection run (unloaded latency) put all four at 0.13 to 0.27 ms p50; the differences
+there were inside the noise (the Go bare/with-LXS order even flipped between runs).
+
+### What it means
+
+- **The Node middleware is not what makes a Node app slow.** At saturation the Express app
+  itself costs ~230 µs of CPU per request (4.3k req/s on one core); the middleware's 5 to 10 µs
+  is 2 to 4 % of that, and the end-to-end p50/p99 with and without it are indistinguishable.
+- **Go is ~10x cheaper per request** (0.5 µs vs 5 to 10 µs) and allocation-free. In a Go app
+  that is ~5 to 10 % of a trivial handler's throughput at full saturation (+10 to 25 µs p50,
+  +0.1 ms p99 in the table above) and nothing for a handler that does real work.
+- **One real cost in Node is linear in blocklist CIDRs.** `isBlockedByCidr` re-parses the client
+  address and compares every CIDR with BigInt arithmetic: 50 CIDRs add ~3.5 µs, so 1000 would add
+  ~70 µs per request. That is fixable in place (parse the client once, 32-bit integer compare for
+  IPv4, or a prefix trie) without a rewrite.
+
+**Recommendation: do not rewrite the Node SDK in Go for speed.** Ship the Go SDK for Go
+customers (it now passes all 80 vectors on net/http, chi, gin and echo), and fix the Node CIDR
+matching if large CIDR blocklists are expected.

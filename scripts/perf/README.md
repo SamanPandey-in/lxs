@@ -13,6 +13,18 @@ node scripts/perf/web.mjs http://localhost:3000 <incident-id>
 node scripts/perf/burst.mjs <project-id>
 ```
 
+```bash
+# 4. G5 burst: a 5,000-event single-attacker chain as 100 POSTs of 50; drain time, job count,
+#    worker busy time (needs the API's DATABASE_URL, read-only)
+node scripts/perf/chain5k.mjs --project <project-id> --db "$DATABASE_URL"   [--api http://localhost:8080] [--events 5000] [--batch 50] [--metrics-token <token>]
+```
+
+`chain5k.mjs` reads `events` for its own random source IP and `pgboss.job`/`pgboss.archive` rows
+for the project; it writes only through `/v1/ingest`. Use a throwaway project or a scratch
+database (a `postgres:16-alpine` container on another port, migrated and seeded with
+`pnpm --filter @lxs/api db:migrate` / `db:seed`), never production. To compare two builds, run
+each API against the same scratch DB on a spare port and point `--api` at it.
+
 Get the project id from `pnpm db:seed`, or:
 
 ```bash

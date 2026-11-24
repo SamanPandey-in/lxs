@@ -7,10 +7,11 @@ import { z } from 'zod';
 import { db } from '../db/client.js';
 import { decoys, events, sensors } from '../db/schema.js';
 import { env } from '../env.js';
-import { enqueueProcessEvents } from '../jobs/queue.js';
+import { enqueueProcessSources } from '../jobs/queue.js';
 import { HttpError, invalid } from '../lib/errors.js';
 import { parse } from '../lib/parse.js';
 import { requireIngestKey } from '../plugins/bearer-key.js';
+import * as metrics from '../plugins/metrics.js';
 import { ingestRateLimit, releaseIngestQuota, reserveIngestQuota } from '../plugins/rate-limit.js';
 
 const gunzipAsync = promisify(gunzip);
@@ -178,16 +179,20 @@ export async function ingestEvents(opts: {
   });
 
   const eventIds: string[] = [];
+  const inserted: { id: string; srcIp: string }[] = [];
   try {
     await db.transaction(async (tx) => {
       for (let i = 0; i < unique.length; i += 200) {
         const chunk = unique.slice(i, i + 200);
-        const inserted = await tx
+        const rowsOut = await tx
           .insert(events)
           .values(chunk)
           .onConflictDoNothing({ target: [events.projectId, events.eventUid] })
-          .returning({ id: events.id });
-        for (const r of inserted) eventIds.push(r.id);
+          .returning({ id: events.id, srcIp: events.srcIp });
+        for (const r of rowsOut) {
+          eventIds.push(r.id);
+          inserted.push(r);
+        }
       }
     });
   } catch {
@@ -201,7 +206,8 @@ export async function ingestEvents(opts: {
       .where(and(eq(decoys.projectId, opts.projectId), inArray(decoys.decoyKey, keys)))
       .catch(() => {});
   }
-  if (eventIds.length) await enqueueProcessEvents({ projectId: opts.projectId, eventIds });
+  // G5: coalesced per (project, source); see enqueueProcessSources.
+  if (inserted.length) await enqueueProcessSources(opts.projectId, inserted);
 
   return {
     accepted: eventIds.length,
@@ -279,6 +285,10 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
         byteCount,
       });
       if (!quota.allowed) {
+        // metrics
+        metrics.ingestRequests.inc({ outcome: 'quota_exceeded' });
+        metrics.ingestEvents.inc({ outcome: 'throttled' }, body.events.length);
+        metrics.ingestBytes.inc({ outcome: 'quota_exceeded' }, byteCount);
         return reply
           .header('Retry-After', ingestRetryAfterHeader(quota.retryAfter))
           .status(429)
@@ -298,6 +308,9 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
           rawEvents: body.events,
         });
       } catch (error) {
+        // metrics
+        metrics.ingestRequests.inc({ outcome: 'error' });
+        metrics.ingestBytes.inc({ outcome: 'error' }, byteCount);
         if (error instanceof HttpError && error.status === 503) {
           await releaseIngestQuota({
             projectId: auth.projectId,
@@ -308,6 +321,12 @@ export async function ingestRoutes(app: FastifyInstance): Promise<void> {
         }
         throw error;
       }
+      // metrics
+      metrics.ingestRequests.inc({ outcome: 'accepted' });
+      metrics.ingestBytes.inc({ outcome: 'accepted' }, byteCount);
+      metrics.ingestEvents.inc({ outcome: 'accepted' }, res.accepted);
+      metrics.ingestEvents.inc({ outcome: 'duplicate' }, res.duplicates);
+      metrics.ingestEvents.inc({ outcome: 'rejected' }, res.rejected.length);
       return reply
         .status(202)
         .send({ accepted: res.accepted, duplicates: res.duplicates, rejected: res.rejected });

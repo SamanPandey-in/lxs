@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { recordLlmCall } from '../plugins/metrics.js';
 
 /**
  * Provider-agnostic LLM adapter. The narrator is its only caller: one prompt in, one
@@ -27,6 +28,8 @@ export interface LlmRequest {
 export interface LlmReply {
   text: string;
   model: string;
+  /** Token usage as the provider reported it, when it did (metrics only). */
+  usage?: { inputTokens?: number; outputTokens?: number };
 }
 
 export interface LlmProvider {
@@ -108,7 +111,11 @@ function anthropicProvider(cfg: LlmConfig): LlmProvider {
       if (res.stop_reason !== 'end_turn')
         throw new LlmError(`Model stopped early: ${res.stop_reason}`);
       const text = res.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])).join('');
-      return { text, model: res.model };
+      const usage = {
+        inputTokens: res.usage?.input_tokens,
+        outputTokens: res.usage?.output_tokens,
+      };
+      return { text, model: res.model, usage };
     },
   };
 }
@@ -123,6 +130,7 @@ function openAiProvider(cfg: LlmConfig): LlmProvider {
       let body: {
         model?: string;
         choices?: { message?: { content?: string | null }; finish_reason?: string }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
       try {
         res = await fetch(`${base}/chat/completions`, {
@@ -149,7 +157,16 @@ function openAiProvider(cfg: LlmConfig): LlmProvider {
       const choice = body.choices?.[0];
       if (choice?.finish_reason && choice.finish_reason !== 'stop')
         throw new LlmError(`Model stopped early: ${choice.finish_reason}`);
-      return { text: choice?.message?.content ?? '', model: body.model ?? cfg.model };
+      return {
+        text: choice?.message?.content ?? '',
+        model: body.model ?? cfg.model,
+        ...(body.usage && {
+          usage: {
+            inputTokens: body.usage.prompt_tokens,
+            outputTokens: body.usage.completion_tokens,
+          },
+        }),
+      };
     },
   };
 }
@@ -167,6 +184,7 @@ function googleProvider(cfg: LlmConfig): LlmProvider {
         output_text?: string;
         output?: { type?: string; text?: string }[];
         steps?: { type?: string; content?: { type?: string; text?: string }[] }[];
+        usage?: { total_input_tokens?: number; total_output_tokens?: number };
       };
       try {
         res = await fetch(`${base}/interactions`, {
@@ -203,14 +221,38 @@ function googleProvider(cfg: LlmConfig): LlmProvider {
         body.output?.flatMap((part) => (part.type === 'text' ? [part.text ?? ''] : [])).join('') ??
         '';
       if (!text) throw new LlmError('Provider returned no text output');
-      return { text, model: body.model ?? cfg.model };
+      const usage = body.usage && {
+        inputTokens: body.usage.total_input_tokens,
+        outputTokens: body.usage.total_output_tokens,
+      };
+      return { text, model: body.model ?? cfg.model, ...(usage && { usage }) };
     },
   };
 }
 
 export const createLlmProvider = (cfg: LlmConfig): LlmProvider =>
-  cfg.provider === 'anthropic'
-    ? anthropicProvider(cfg)
-    : cfg.provider === 'google'
-      ? googleProvider(cfg)
-      : openAiProvider(cfg);
+  withMetrics(
+    cfg.provider === 'anthropic'
+      ? anthropicProvider(cfg)
+      : cfg.provider === 'google'
+        ? googleProvider(cfg)
+        : openAiProvider(cfg),
+  );
+
+/** metrics: count calls, tokens and estimated cost around any provider. Behaviour unchanged. */
+function withMetrics(p: LlmProvider): LlmProvider {
+  return {
+    name: p.name,
+    model: p.model,
+    async complete(req) {
+      try {
+        const reply = await p.complete(req);
+        recordLlmCall(p.name, p.model, 'ok', reply.usage);
+        return reply;
+      } catch (err) {
+        recordLlmCall(p.name, p.model, 'error');
+        throw err;
+      }
+    },
+  };
+}

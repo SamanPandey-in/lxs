@@ -16,7 +16,8 @@
       "!**/attacker-demo/**/node_modules",
       "!**/.lxs",
       "!**/*.css",
-      "!**/db/migrations/meta"
+      "!**/db/migrations/meta",
+      "!**/.claude"
     ]
   },
   "formatter": {

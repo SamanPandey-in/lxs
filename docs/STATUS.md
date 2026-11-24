@@ -221,13 +221,22 @@ A manual run from a branch builds without pushing.
 
 ---
 
-## Known gaps (not in Phase 1)
+## Phase 2 (merged 2026-11-24)
+
+| Stream | What shipped | Verified |
+|---|---|---|
+| **E: lxs.yaml + conformance** | `lxs.yaml` with a generated JSON Schema; `conformance/` SPEC.md + 80 vectors; 5 middleware security fixes (x-ds-* reached the app, non-canonical IP blocklist bypass, mapped CIDRs, lenient prefixes, absolute-form targets) | Node Express + Fastify 161/161 |
+| **F: Go SDK** | `sdk/go`: net/http middleware (stdlib only) + chi, gin, echo adapters; `lxsyaml` loader; Go conformance runner; `go.yml` CI | 80/80 on every adapter, Windows and Linux. Middleware costs ~0.5 µs/request in Go, 2–11 µs in Node (Express overhead indistinguishable). No Go rewrite of the platform needed |
+| **G: First run** | `lxs init --preset`, hosted endpoint default (placeholder URL), `lxs doctor` (10 checks), onboarding safe test hit, sample data load/clear (migration 0009) | Test hit alerts; sample data sends no alerts; clear removes only sample rows (local Postgres, 2026-11-24). Browser pass not done |
+| **H: Worker + ops** | Coalesced worker, `/metrics`, deploy workflow, backup/restore scripts, OPERATIONS.md | Burst numbers measured; metrics scraped locally |
+
+## Known gaps
 
 | ID | Gap | Where it stands |
 |---|---|---|
-| G5 | The worker re-reads an attacker's chain on every ingest (`process-events.ts`, capped at `CHAIN_LIMIT = 5000`) | Bounded, but still a re-read per ingest. Planned: Phase 2, stream H |
-| G8 | `migrations/meta` has only `0000_snapshot.json` while migrations run to `0005` | Planned: Phase 0 baseline |
-| G8 | No platform deploy, metrics or backups. CI is `ci.yml` only (plus the two new workflows) | Planned: Phase 2, stream H |
+| G5 | Worker re-read per ingest | **Done (Phase 2 H):** one coalesced job per (project, source) with a 1 s debounce; 5,000-event burst went from 100 jobs / 24–54 s to 7–11 jobs / 5.5–9.8 s (see PERFORMANCE.md). Still a bounded 24 h window read per run, because the rules need the whole chain |
+| G8 | Drizzle snapshots | **Done (Phase 0):** baseline at 0006; migrations now run to 0009 with no drift |
+| G8 | Deploy, metrics, backups | **Built (Phase 2 H):** `/metrics` (Prometheus), gated `deploy.yml` (SSH target; ECS is a TODO), `scripts/ops/backup.sh` + `restore-test.sh` (both run against a scratch DB). Workflow never run; needs the secrets in OPERATIONS.md |
 | G10 | No geo/ASN enrichment | Phase 4 |
 | G6 (rest) | All seven web decoy templates share one stylesheet and `page()` helper; the `.env` bait's `APP_KEY` decodes to "This is not a real key at all!!!"; `sqlDump` has a fixed `pg_dump version 14.9` banner; no second-order assets (`/wp-includes/` etc. all 404 alike); canned responses come back in under a millisecond; one honeytoken value per deployment, so a leak can't be attributed to a visitor; detection thresholds are readable in the repo | Planned: Phase 3, stream L |
 | | `CORS_ORIGINS` must be set for any real deployment. The API refuses cross-origin calls from a dashboard host that isn't listed | Configuration, documented |
