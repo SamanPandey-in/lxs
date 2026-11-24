@@ -64,8 +64,9 @@ export function parseRemotePolicy(j: unknown): RemotePolicy | null {
     version: Number.isFinite(version) ? version : 0,
     blocklist,
     watchlist: wlIps.filter((x): x is string => typeof x === 'string' && isIpOrCidr(x)),
+    // A /0 entry matches every address and would switch blocking off for everyone: never pass it on.
     allowlist: (Array.isArray(o.allowlist) ? o.allowlist : []).filter(
-      (x): x is string => typeof x === 'string' && isIpOrCidr(x),
+      (x): x is string => typeof x === 'string' && isIpOrCidr(x) && !/\/0+$/.test(x),
     ),
     pollIntervalSeconds: Number.isFinite(poll) && poll > 0 ? poll : undefined,
   };

@@ -84,6 +84,8 @@ export function renderManifest(cfg: ResolvedConfig, tokens: HoneytokenFile): str
       criticality: a.criticality,
     })),
     honeytokens: tokens.tokens.map((t) => ({ id: t.id, kind: t.kind, planted_in: t.planted_in })),
+    // Tells ds-agent which production telemetry files to tail (absent: none).
+    ...(cfg.options.telemetry ? { telemetry: { sources: cfg.options.telemetry.sources } } : {}),
     posture,
   };
   return `${JSON.stringify(doc, null, 2)}\n`;

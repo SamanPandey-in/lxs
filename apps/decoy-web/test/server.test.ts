@@ -235,9 +235,11 @@ test('state capacity never clears unrelated sessions or acceptAfter progress', a
     assert.equal(r.statusCode, 401, `source ${i} should retain normal decoy behavior`);
   }
 
-  // Existing per-source state remains usable at capacity: acceptAfter reaches its threshold,
-  // and the already-authenticated session remains valid after the flood.
-  assert.equal((await login('198.51.100.1')).statusCode, 302);
+  // Existing per-source state remains usable at capacity: acceptAfter reaches its per-session
+  // threshold (2..4), and the already-authenticated session remains valid after the flood.
+  let status = 0;
+  for (let i = 2; i <= 4 && status !== 302; i++) status = (await login('198.51.100.1')).statusCode;
+  assert.equal(status, 302);
   const panel = await app.inject({ method: 'GET', url: '/admin/panel', headers: H });
   assert.equal(panel.statusCode, 200);
   assert.match(panel.body, /Export customers/);

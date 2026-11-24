@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { LXS } from './create.js';
 import { LXSConfigError } from './errors.js';
-import { parseCidr } from './netutil.js';
+import { isMatchAll, parseCidr } from './netutil.js';
 import { resolveRunDir } from './socket.js';
 import type {
   AssetOptions,
@@ -17,6 +17,7 @@ import type {
   ResolvedOptions,
   SshOptions,
   SshSpec,
+  TelemetrySource,
   WebAdminOptions,
   WebAdminSpec,
   WebBaitOptions,
@@ -33,18 +34,48 @@ const CredPair = z.tuple([z.string().min(1).max(64), z.string().min(1).max(128)]
 const CidrList = z.array(z.string()).superRefine((list, ctx) => {
   list.forEach((c, i) => {
     if (!parseCidr(c)) ctx.addIssue({ code: 'custom', message: `invalid CIDR '${c}'`, path: [i] });
+    else if (isMatchAll(c))
+      ctx.addIssue({
+        code: 'custom',
+        message: `'${c}' matches every address and would disable blocking entirely; list your own scanners' ranges instead`,
+        path: [i],
+      });
   });
 });
+export const MAX_TRUSTED_HOPS = 10;
 const TrustProxy = z.union([
-  z.boolean(),
+  z.literal(false),
+  z
+    .number()
+    .int('trustProxy hop count must be an integer')
+    .min(1, 'trustProxy hop count must be at least 1 (use false for no proxy)')
+    .max(MAX_TRUSTED_HOPS, `trustProxy hop count must be at most ${MAX_TRUSTED_HOPS}`),
   z.array(z.string()).superRefine((list, ctx) => {
     list.forEach((c, i) => {
       if (!['loopback', 'uniquelocal', 'linklocal'].includes(c) && !parseCidr(c)) {
         ctx.addIssue({ code: 'custom', message: `invalid trustProxy entry '${c}'`, path: [i] });
+      } else if (isMatchAll(c)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `'${c}' trusts every address, which lets any client forge X-Forwarded-For; list your proxies' addresses instead`,
+          path: [i],
+        });
       }
     });
   }),
 ]);
+const Telemetry = z.object({
+  dir: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9._/~-]{1,256}$/,
+      'telemetry.dir: a host directory path of letters, digits and . _ / ~ -',
+    ),
+  sources: z
+    .array(z.enum(['firewall', 'auth']))
+    .min(1)
+    .optional(),
+});
 
 export const OptionsSchema = z.object({
   service: z
@@ -57,6 +88,7 @@ export const OptionsSchema = z.object({
   allowlist: CidrList.default([]),
   disabled: z.boolean().optional(),
   logger: z.any().optional(),
+  telemetry: Telemetry.optional(),
 });
 
 export const WebAdminSchema = z.object({
@@ -220,6 +252,16 @@ export function inferTemplate(path: string): WebBaitTemplate | undefined {
 }
 
 export function resolveOptions(input: LXSOptions = {}): ResolvedOptions {
+  if ((input as { trustProxy?: unknown } | undefined)?.trustProxy === true) {
+    throw new LXSConfigError(
+      'E_TRUST_PROXY',
+      'trustProxy: true is not supported: it makes the leftmost X-Forwarded-For entry the client ' +
+        'address, and the client controls that entry, so any attacker could pick their own IP ' +
+        '(evading blocks, or getting someone else blocked).',
+      "Use a hop count (trustProxy: 1 for one reverse proxy in front of the app) or list your proxies' " +
+        "addresses (trustProxy: ['loopback'] or ['10.0.0.0/8']).",
+    );
+  }
   const o = parseOrThrow(OptionsSchema, input, 'E_OPTIONS', 'invalid LXS options');
   return {
     service: o.service,
@@ -228,6 +270,12 @@ export function resolveOptions(input: LXSOptions = {}): ResolvedOptions {
     trustProxy: o.trustProxy,
     allowlist: o.allowlist,
     disabled: o.disabled ?? process.env.LXS_DISABLED === '1',
+    telemetry: o.telemetry
+      ? {
+          dir: o.telemetry.dir,
+          sources: [...new Set<TelemetrySource>(o.telemetry.sources ?? ['firewall', 'auth'])],
+        }
+      : null,
   };
 }
 

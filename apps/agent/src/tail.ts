@@ -3,11 +3,30 @@ import path from 'node:path';
 import type { Counters, Logger } from './telemetry.js';
 
 export interface TailSource {
-  kind: 'web' | 'ssh' | 'redis' | 'postgres';
+  kind: 'web' | 'ssh' | 'redis' | 'postgres' | 'telemetry';
   dir: string;
   /** Only the live file is followed; rotated copies are drained through the already-open handle. */
   match: RegExp;
   decoyId: string;
+  /** For kind 'telemetry': which production log this is. */
+  telemetry?: 'firewall' | 'auth';
+}
+
+/**
+ * Production telemetry (BREAKDOWN E7): `firewall.jsonl` / `auth.jsonl` in one directory, mounted
+ * read-only by `lxs build` when the config declares `telemetry`. Not decoys: these become
+ * prod.firewall / prod.auth events about real assets.
+ */
+export function telemetryTailSources(kinds: readonly string[], dir: string): TailSource[] {
+  return (['firewall', 'auth'] as const)
+    .filter((k) => kinds.includes(k))
+    .map((k) => ({
+      kind: 'telemetry' as const,
+      dir,
+      match: k === 'firewall' ? /^firewall\.jsonl$/ : /^auth\.jsonl$/,
+      decoyId: `prod-${k}`,
+      telemetry: k,
+    }));
 }
 
 export interface TailLine {

@@ -17,8 +17,13 @@ import { LXS } from 'lxs';
 const t = new LXS({
   service: '${service}',          // the app's service name in docker-compose.yml
   mode: 'enforce',          // 'monitor' never blocks, even if the platform asks
-  // trustProxy: ['loopback'], // only if a reverse proxy runs in front of the app
-  // allowlist: ['10.0.0.0/8'], // your own scanners and uptime monitors
+  // Behind a reverse proxy? Either count the proxies in front of the app (only if the app is
+  // unreachable except through them) or list their addresses. Never true: X-Forwarded-For is
+  // client-controlled, so true would let attackers pick their own IP.
+  // trustProxy: 1,              // one proxy (nginx, a load balancer) in front of the app
+  // trustProxy: ['loopback'],   // or: the proxies' addresses ('loopback' | 'uniquelocal' | CIDRs)
+  // allowlist: ['10.0.0.0/8'],  // your own scanners and uptime monitors (never 0.0.0.0/0)
+  // telemetry: { dir: './telemetry' }, // firewall.jsonl / auth.jsonl for the agent to tail
 });
 
 // Web decoys: the second argument is a path on your own domain.

@@ -1,7 +1,8 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import type { HoneytokenSet, WebDecoyConfig, WebDecoysFile } from './config.js';
 import type { JsonlLogger, LogLine } from './log.js';
+import { LruTtlMap } from './lru.js';
 import * as tpl from './templates.js';
 
 export interface ServerDeps {
@@ -9,6 +10,8 @@ export interface ServerDeps {
   honeytokens: HoneytokenSet;
   logger: Pick<JsonlLogger, 'write'>;
   now?: () => number;
+  /** Capacity of each per-source state map (default 5000). Exposed for tests. */
+  maxTracked?: number;
 }
 
 const MAX_BODY = 16 * 1024; // BREAKDOWN 7.11
@@ -19,51 +22,36 @@ const REQUEST_WINDOW_MS = 60 * 1000;
 const MAX_REQUESTS_PER_SOURCE = 120;
 const MAX_LOGINS_PER_SOURCE = 10;
 
-/** A bounded TTL map that never evicts live state to make room for an attacker-controlled key. */
-class BoundedTtlMap<V> {
-  private readonly values = new Map<string, { value: V; expiresAt: number }>();
+/** Decoy session cookie. PHP's default name and format (26 chars of [0-9a-v]) to fit the templates;
+ * the SDK middleware forwards this one cookie (and only values in this exact format) to the decoy. */
+export const SESSION_COOKIE = 'PHPSESSID';
+const SID_RE = /^[0-9a-v]{26}$/;
+const SID_ALPHABET = '0123456789abcdefghijklmnopqrstuv';
+/** acceptAfter N accepts on a per-session attempt drawn from N..N+ACCEPT_AFTER_SPREAD. */
+export const ACCEPT_AFTER_SPREAD = 2;
 
-  constructor(
-    private readonly capacity: number,
-    private readonly now: () => number,
-  ) {}
+export function newSessionId(): string {
+  let s = '';
+  for (const b of randomBytes(26)) s += SID_ALPHABET[b & 31];
+  return s;
+}
 
-  get(key: string): V | undefined {
-    this.sweep(16);
-    const entry = this.values.get(key);
-    if (!entry) return undefined;
-    if (entry.expiresAt <= this.now()) {
-      this.values.delete(key);
-      return undefined;
-    }
-    return entry.value;
+/** The decoy session id from a Cookie header, or undefined if absent or not in our format. */
+export function readSessionId(cookie: unknown): string | undefined {
+  if (typeof cookie !== 'string' || cookie.length > 8192) return undefined;
+  for (const part of cookie.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0 || part.slice(0, eq).trim() !== SESSION_COOKIE) continue;
+    const v = part.slice(eq + 1).trim();
+    return SID_RE.test(v) ? v : undefined;
   }
+  return undefined;
+}
 
-  /** Returns false at capacity instead of clearing or evicting unrelated live state. */
-  set(key: string, value: V, ttlMs: number): boolean {
-    this.sweep(16);
-    const current = this.values.get(key);
-    if (!current && this.values.size >= this.capacity) return false;
-    this.values.set(key, { value, expiresAt: this.now() + ttlMs });
-    return true;
-  }
-
-  delete(key: string): void {
-    this.values.delete(key);
-  }
-
-  private sweep(limit: number): void {
-    const now = this.now();
-    for (let i = 0; i < limit && this.values.size > 0; i++) {
-      const first = this.values.entries().next().value as
-        | [string, { value: V; expiresAt: number }]
-        | undefined;
-      if (!first) return;
-      const [key, entry] = first;
-      this.values.delete(key);
-      if (entry.expiresAt > now) this.values.set(key, entry);
-    }
-  }
+interface Attempts {
+  tries: number;
+  /** Per-session acceptAfter threshold, drawn once when the session's first attempt is recorded. */
+  threshold: number;
 }
 
 /** Never trust the value for anything but logging; fall back to a sentinel the agent drops. */
@@ -165,16 +153,31 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return undefined;
   };
 
-  const authed = new BoundedTtlMap<true>(MAX_TRACKED, now); // sessions keyed by decoy and trusted client IP
-  const attempts = new BoundedTtlMap<number>(MAX_TRACKED, now);
-  const requests = new BoundedTtlMap<number>(MAX_TRACKED, now);
-  const logins = new BoundedTtlMap<number>(MAX_TRACKED, now);
-  const isAuthed = (decoyId: string, ip: string): boolean =>
-    authed.get(`${decoyId}|${ip}`) === true;
+  // LRU-bounded: a flood of new sources only evicts the least recently seen entries, never live state
+  // wholesale. Session state (authed, attempts) is keyed on decoy + SDK-derived client IP + the decoy
+  // session cookie when the client keeps it (IP alone otherwise). Rate limits stay keyed on decoy + IP
+  // so rotating cookies cannot buy more requests.
+  const maxTracked = deps.maxTracked ?? MAX_TRACKED;
+  const authed = new LruTtlMap<true>(maxTracked, now);
+  const attempts = new LruTtlMap<Attempts>(maxTracked, now);
+  const requests = new LruTtlMap<number>(maxTracked, now);
+  const logins = new LruTtlMap<number>(maxTracked, now);
+  /** Primary key first, then the IP-only key a cookie-less first request wrote its state under. */
+  const sessionKeys = (decoyId: string, ip: string, sid: string | undefined): string[] =>
+    sid ? [`${decoyId}|${ip}|${sid}`, `${decoyId}|${ip}`] : [`${decoyId}|${ip}`];
+  const firstOf = <V>(map: LruTtlMap<V>, keys: string[]): V | undefined => {
+    for (const k of keys) {
+      const v = map.get(k);
+      if (v !== undefined) return v;
+    }
+    return undefined;
+  };
   const consumeRequest = (decoyId: string, ip: string): boolean => {
     const key = `${decoyId}|${ip}`;
     const count = requests.get(key) ?? 0;
-    return count < MAX_REQUESTS_PER_SOURCE && requests.set(key, count + 1, REQUEST_WINDOW_MS);
+    if (count >= MAX_REQUESTS_PER_SOURCE) return false;
+    requests.set(key, count + 1, REQUEST_WINDOW_MS);
+    return true;
   };
 
   const send = (
@@ -250,6 +253,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       const brand = decoy.brand ?? 'Admin Portal';
       const sub = path.slice(mount.length);
       const loginAttempt = method === 'POST' && (sub === '/login' || sub === '');
+      const sid = readSessionId(req.headers.cookie);
+      const keys = sessionKeys(decoy.id, ip, sid);
+      if (!sid) {
+        reply.header(
+          'set-cookie',
+          `${SESSION_COOKIE}=${newSessionId()}; path=${mount}; HttpOnly; SameSite=Lax`,
+        );
+      }
 
       if (method === 'GET' || method === 'HEAD') {
         if (sub === '')
@@ -273,7 +284,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
             200,
           );
         if (sub === '/panel' || sub === '/export' || sub === '/export.csv') {
-          if (!isAuthed(decoy.id, ip) || decoy.panel === 'none') {
+          if (firstOf(authed, keys) !== true || decoy.panel === 'none') {
             return done(
               reply
                 .code(302)
@@ -319,10 +330,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       if (loginAttempt) {
         const sourceKey = `${decoy.id}|${ip}`;
         const loginCount = logins.get(sourceKey) ?? 0;
-        if (
-          loginCount >= MAX_LOGINS_PER_SOURCE ||
-          !logins.set(sourceKey, loginCount + 1, REQUEST_WINDOW_MS)
-        ) {
+        if (loginCount >= MAX_LOGINS_PER_SOURCE) {
           return done(
             send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
               'retry-after': '60',
@@ -330,34 +338,26 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
             429,
           );
         }
+        logins.set(sourceKey, loginCount + 1, REQUEST_WINDOW_MS);
         const username = clip(pick(body, ['username', 'user', 'email', 'login']), 256) ?? '';
         const password = clip(pick(body, ['password', 'pass', 'pwd']), 128) ?? '';
-        const key = sourceKey;
-        const tries = (attempts.get(key) ?? 0) + 1;
+        const prev = firstOf(attempts, keys);
+        const tries = (prev?.tries ?? 0) + 1;
+        // Randomised per session so a scanner cannot learn the exact threshold; never below N.
+        const threshold =
+          prev?.threshold ??
+          (decoy.acceptAfter !== undefined
+            ? decoy.acceptAfter + randomInt(0, ACCEPT_AFTER_SPREAD + 1)
+            : Number.POSITIVE_INFINITY);
         const accepted =
           (decoy.acceptCredentials ?? []).some(([u, p]) => u === username && p === password) ||
-          (decoy.acceptAfter !== undefined && tries >= decoy.acceptAfter);
+          tries >= threshold;
+        const primary = keys[0] as string;
         if (accepted) {
-          if (!authed.set(key, true, SESSION_MS)) {
-            return done(
-              send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
-                'retry-after': '60',
-              }),
-              429,
-              { kind: 'login', username, password, accepted: false },
-            );
-          }
-          attempts.delete(key);
+          authed.set(primary, true, SESSION_MS);
+          for (const k of keys) attempts.delete(k);
         } else {
-          if (!attempts.set(key, tries, STATE_TTL_MS)) {
-            return done(
-              send(reply, 429, 'text/plain; charset=utf-8', 'Too Many Requests', {
-                'retry-after': '60',
-              }),
-              429,
-              { kind: 'login', username, password, accepted: false },
-            );
-          }
+          attempts.set(primary, { tries, threshold }, STATE_TTL_MS);
         }
         const extra: Partial<LogLine> = { kind: 'login', username, password, accepted };
         if (accepted && decoy.panel !== 'none') {

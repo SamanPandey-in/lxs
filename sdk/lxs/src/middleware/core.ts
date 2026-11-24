@@ -5,6 +5,7 @@ import { AssetMatcher, type DecoyMatch, DecoyMatcher, pathOnly } from '../matche
 import {
   buildIpPredicate,
   type CidrMatcher,
+  isMatchAll,
   isValidIp,
   parseCidr,
   parseIp,
@@ -53,6 +54,25 @@ const HOP_BY_HOP = new Set([
 ]);
 /** Credentials of real users never reach the attacker-facing container. */
 const STRIPPED_REQUEST_HEADERS = new Set(['cookie', 'authorization', 'proxy-authorization']);
+/**
+ * The one cookie that does reach ds-web: the decoy's own session id, which ds-web issued, scoped to
+ * the decoy mount. Only values in ds-web's exact format (26 chars of [0-9a-v]) are forwarded.
+ * Keep in sync with SESSION_COOKIE in apps/decoy-web/src/server.ts.
+ */
+export const DECOY_SESSION_COOKIE = 'PHPSESSID';
+const DECOY_SID_RE = /^[0-9a-v]{26}$/;
+
+export function decoySessionCookie(raw: string | string[] | undefined): string | null {
+  const text = Array.isArray(raw) ? raw.join('; ') : raw;
+  if (typeof text !== 'string' || text.length === 0 || text.length > 8192) return null;
+  for (const part of text.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0 || part.slice(0, eq).trim() !== DECOY_SESSION_COOKIE) continue;
+    const v = part.slice(eq + 1).trim();
+    if (DECOY_SID_RE.test(v)) return `${DECOY_SESSION_COOKIE}=${v}`;
+  }
+  return null;
+}
 const MAX_PROXY_BODY = 64 * 1024;
 const QUEUE_MAX = 1000;
 
@@ -96,27 +116,56 @@ const emptyPolicy = (): PolicyState => ({
   allow: null,
 });
 
-function makeClientIp(
-  trust: boolean | string[],
-  devSim: boolean,
+/** X-Forwarded-For entries, possibly split over several header lines; at most 64 (DoS bound). */
+function forwardedFor(req: IncomingMessage): string[] {
+  const raw = req.headers['x-forwarded-for'];
+  const text = Array.isArray(raw) ? raw.join(',') : raw;
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const hops = text.split(',').map((s) => stripMapped(s.trim()));
+  return hops.length > 64 ? hops.slice(hops.length - 64) : hops;
+}
+
+/**
+ * Client address from the socket and, when proxies are trusted, X-Forwarded-For walked from the
+ * right (nearest hop first). Entries left of the first untrusted hop are never read: they are
+ * whatever the client sent. `true` is rejected at config time for exactly that reason.
+ */
+export function makeClientIp(
+  trust: false | number | readonly string[],
+  devSim = false,
 ): (req: IncomingMessage) => string {
-  const trusted: ((ip: string) => boolean) | null =
-    trust === true ? () => true : Array.isArray(trust) ? buildIpPredicate(trust) : null;
+  const trusted: ((ip: string) => boolean) | null = Array.isArray(trust)
+    ? buildIpPredicate(trust)
+    : null;
+  const hopCount = typeof trust === 'number' && Number.isInteger(trust) && trust > 0 ? trust : 0;
   return (req) => {
     const sock = stripMapped(req.socket?.remoteAddress ?? '');
     if (devSim) {
       const h = req.headers['x-ds-sim-ip'];
       if (typeof h === 'string' && isValidIp(h.trim())) return h.trim();
     }
+    if (hopCount > 0) {
+      // The socket peer is trusted hop 1, the rightmost XFF entry hop 2, ...; the client is the
+      // address just beyond the last trusted hop. A shorter chain means fewer proxies appended,
+      // so the leftmost entry is the furthest real hop.
+      const hops = forwardedFor(req);
+      let client = sock;
+      for (let k = 1; k <= hopCount && hops.length - k >= 0; k++) {
+        const h = hops[hops.length - k] as string;
+        if (!isValidIp(h)) return sock;
+        client = h;
+      }
+      return client;
+    }
     if (!trusted || !trusted(sock)) return sock;
-    const xff = req.headers['x-forwarded-for'];
-    if (typeof xff !== 'string' || xff.length === 0) return sock;
-    const hops = xff.split(',').map((s) => stripMapped(s.trim()));
+    const hops = forwardedFor(req);
+    if (hops.length === 0) return sock;
     for (let i = hops.length - 1; i >= 0; i--) {
       const h = hops[i] as string;
       if (!isValidIp(h)) return sock;
       if (!trusted(h)) return h;
     }
+    // Every entry is one of our proxies: the leftmost is the furthest one we can vouch for.
     return hops[0] ?? sock;
   };
 }
@@ -320,7 +369,17 @@ export function createCore(
         if (typeof id === 'string') next.honeytokens.set(hash, id);
       }
     }
-    next.allow = buildIpPredicate(list(o.allowlist));
+    // A /0 entry would switch blocking off for everyone; the platform should never send one, but the
+    // SDK refuses it anyway (as it does in the static allowlist).
+    const allow = list(o.allowlist);
+    const safeAllow = allow.filter((c) => !isMatchAll(c));
+    if (safeAllow.length !== allow.length) {
+      warnOnce(
+        'allow0',
+        'ignored a /0 entry in the platform allowlist (it would disable blocking).',
+      );
+    }
+    next.allow = buildIpPredicate(safeAllow);
     policy = next;
   };
 
@@ -343,6 +402,8 @@ export function createCore(
       if (HOP_BY_HOP.has(k) || STRIPPED_REQUEST_HEADERS.has(k) || k.startsWith('x-ds-')) continue;
       headers[k] = v;
     }
+    const sid = decoySessionCookie(req.headers.cookie);
+    if (sid) headers.cookie = sid;
     headers['x-ds-client-ip'] = ip;
     headers['x-ds-decoy-id'] = decoy.id;
     headers['x-ds-request-id'] = requestId();

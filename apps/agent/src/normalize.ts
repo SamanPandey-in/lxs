@@ -1,11 +1,17 @@
 import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { DecoyEvent } from '@lxs/schema';
+import { LruMap } from './lru.js';
 import type { Logger } from './telemetry.js';
 import { deterministicUlid } from './ulid.js';
 
+export type TelemetryKind = 'firewall' | 'auth';
+
 export interface RawLine {
-  source: 'web' | 'ssh' | 'redis' | 'postgres';
+  /** 'telemetry' = production firewall/auth JSONL (not a decoy; becomes prod.firewall / prod.auth). */
+  source: 'web' | 'ssh' | 'redis' | 'postgres' | 'telemetry';
+  /** For telemetry lines: which file the line came from (the record may also say so itself). */
+  telemetry?: TelemetryKind;
   /** Manifest decoy id (web lines carry their own decoy_id; ssh lines take this one). */
   decoyId: string;
   /** Stable key of the file the line came from, plus the byte offset: together the idempotency seed. */
@@ -107,6 +113,10 @@ function fromPackage(mod: NormalizerModule, opts: NormalizeOptions): LineNormali
       let n = 0;
       ctx.newId = (t) => deterministicUlid(t, `${seed}:${n}`);
       const events: DecoyEvent[] = [];
+      if (raw.source === 'telemetry') {
+        const ev = mod.normalizeTelemetry(rec, ctx, raw.telemetry);
+        return ev ? [ev] : [];
+      }
       const databaseEvents = normalizeDatabaseLine(raw.source, rec, opts, raw.decoyId, seed);
       if (databaseEvents !== null) return databaseEvents;
       if (raw.source === 'ssh') {
@@ -290,6 +300,62 @@ export function createLocalNormalizer(opts: NormalizeOptions): LineNormalizer {
     const d = typeof v === 'string' ? new Date(v) : new Date();
     return (Number.isNaN(d.getTime()) ? new Date() : d).toISOString();
   };
+  /** Same field semantics as @lxs/normalizer's normalizeTelemetry (firewall.jsonl / auth.jsonl). */
+  const localTelemetry = (
+    rec: Record<string, unknown>,
+    hint: TelemetryKind | undefined,
+    seed: string,
+  ): DecoyEvent | null => {
+    const ip = clip(rec.src_ip ?? rec.ip, 64)?.trim() ?? '';
+    if (!isIP(ip) || isLoopbackIp(ip)) return null;
+    const declared = String(rec.source ?? rec.kind ?? hint ?? '').toLowerCase();
+    const type =
+      declared === 'firewall' || declared === 'prod.firewall'
+        ? 'firewall'
+        : declared === 'auth' || declared === 'prod.auth'
+          ? 'auth'
+          : 'action' in rec || 'dst_port' in rec
+            ? 'firewall'
+            : 'result' in rec || 'user' in rec || 'username' in rec
+              ? 'auth'
+              : null;
+    if (!type) return null;
+    const base = {
+      timestamp: ts(rec.ts ?? rec.timestamp),
+      sensor: 'prod' as const,
+      is_decoy: false,
+      src_ip: ip,
+      asset_name: clip(rec.asset ?? rec.asset_name, 128),
+    };
+    if (type === 'firewall') {
+      const action = String(rec.action ?? '').toLowerCase();
+      const dstPort = toPort(rec.dst_port);
+      return mk(`${seed}:0`, {
+        ...base,
+        src_port: toPort(rec.src_port),
+        dst_service: (
+          clip(rec.dst_service, 128) ?? `fw:${clip(rec.dst_ip, 64) ?? 'unknown'}:${dstPort ?? 0}`
+        ).slice(0, 128),
+        event_type: 'prod.firewall',
+        outcome:
+          action === 'allow' || action === 'accept' ? 'success' : action ? 'failure' : 'unknown',
+      });
+    }
+    const result = String(rec.result ?? rec.outcome ?? '').toLowerCase();
+    return mk(`${seed}:0`, {
+      ...base,
+      dst_service: clip(rec.dst_service, 128) ?? `auth:${clip(rec.service, 100) ?? 'app'}`,
+      event_type: 'prod.auth',
+      outcome:
+        result === 'success'
+          ? 'success'
+          : result === 'failure' || result === 'failed'
+            ? 'failure'
+            : 'unknown',
+      username: clip(rec.user ?? rec.username, 256),
+      user_agent: clip(rec.ua ?? rec.user_agent, 512),
+    });
+  };
 
   return {
     name: 'local',
@@ -368,6 +434,12 @@ export function createLocalNormalizer(opts: NormalizeOptions): LineNormalizer {
           });
         }
         return events;
+      }
+
+      if (raw.source === 'telemetry') {
+        const ev = localTelemetry(rec, raw.telemetry, seed);
+        if (!ev) stats.dropped++;
+        return ev ? [ev] : [];
       }
 
       const databaseEvents = normalizeDatabaseLine(raw.source, rec, opts, raw.decoyId, seed);
@@ -479,7 +551,8 @@ export async function createNormalizer(
     const mod = await import('@lxs/normalizer');
     if (
       typeof mod.createNormalizerContext === 'function' &&
-      typeof mod.normalizeCowrie === 'function'
+      typeof mod.normalizeCowrie === 'function' &&
+      typeof mod.normalizeTelemetry === 'function'
     ) {
       return fromPackage(mod, opts);
     }
@@ -506,8 +579,21 @@ interface Bucket {
  * event with `count` = how many were folded in. Successes always pass through untouched.
  */
 export class AuthAggregator {
-  private readonly buckets = new Map<string, Bucket>();
-  constructor(private readonly threshold = 20) {}
+  /**
+   * LRU-bounded: a flood of new sources evicts only the least recently seen buckets (their pending
+   * overflow is emitted, not lost), so an attacker cannot reset everyone's counters by flooding.
+   */
+  private readonly buckets: LruMap<Bucket>;
+  private evictedOut: DecoyEvent[] = [];
+  constructor(
+    private readonly threshold = 20,
+    capacity = 20_000,
+  ) {
+    this.buckets = new LruMap<Bucket>(capacity, (key, b) => {
+      const o = this.overflow(key, b);
+      if (o) this.evictedOut.push(o);
+    });
+  }
 
   private overflow(key: string, b: Bucket): DecoyEvent | null {
     if (b.over === 0 || !b.last) return null;
@@ -530,7 +616,6 @@ export class AuthAggregator {
       b = undefined;
     }
     if (!b) {
-      if (this.buckets.size > 20_000) this.buckets.clear();
       b = { minute, seen: 0, over: 0 };
       this.buckets.set(key, b);
     }
@@ -540,6 +625,10 @@ export class AuthAggregator {
       b.over++;
       b.last = ev;
     }
+    if (this.evictedOut.length > 0) {
+      out.push(...this.evictedOut);
+      this.evictedOut = [];
+    }
     return out;
   }
 
@@ -547,7 +636,7 @@ export class AuthAggregator {
   flush(nowMs: number = Date.now()): DecoyEvent[] {
     const cur = Math.floor(nowMs / 60_000);
     const out: DecoyEvent[] = [];
-    for (const [key, b] of this.buckets) {
+    for (const [key, b] of [...this.buckets.entries()]) {
       if (b.minute < cur) {
         const o = this.overflow(key, b);
         if (o) out.push(o);

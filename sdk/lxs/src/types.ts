@@ -9,13 +9,37 @@ export interface LXSOptions {
   mode?: 'monitor' | 'enforce';
   /** Directory holding the web/ and agent/ socket dirs. Default env LXS_RUN_DIR or /run/lxs. */
   runDir?: string;
-  /** Trust X-Forwarded-For from these hops: true | 'loopback' | 'uniquelocal' | CIDRs. Default false. */
-  trustProxy?: boolean | string[];
-  /** CIDRs never reported or blocked (your own scanners and uptime monitors). */
+  /**
+   * Which proxies may set X-Forwarded-For. Default false (use the socket address).
+   * - a list of proxy addresses: 'loopback' | 'uniquelocal' | 'linklocal' | CIDRs. X-Forwarded-For is
+   *   walked from the right, skipping these; the first address that is not one of them is the client.
+   * - a hop count n (integer >= 1): exactly n proxies sit in front of the app; the client is the n-th
+   *   address from the right of [...X-Forwarded-For, socket]. Only safe if the app is unreachable except
+   *   through those proxies.
+   * `true` is rejected: it would make the leftmost (client-controlled) entry the client address.
+   */
+  trustProxy?: TrustProxyOption;
+  /** CIDRs never reported or blocked (your own scanners and uptime monitors). Prefix /0 is rejected. */
   allowlist?: string[];
   /** Default: env LXS_DISABLED === '1'. */
   disabled?: boolean;
   logger?: Pick<Console, 'warn' | 'error'>;
+  /**
+   * Production telemetry for the agent to tail (correlation with real assets that are not HTTP
+   * routes). `dir` is a host directory (relative to the compose file, or absolute) holding
+   * `firewall.jsonl` and/or `auth.jsonl`; it is mounted read-only into ds-agent.
+   */
+  telemetry?: TelemetryOptions;
+}
+
+export type TrustProxyOption = false | number | string[];
+
+export type TelemetrySource = 'firewall' | 'auth';
+
+export interface TelemetryOptions {
+  dir: string;
+  /** Default both. */
+  sources?: TelemetrySource[];
 }
 
 export interface WebAdminOptions {
@@ -131,9 +155,10 @@ export interface ResolvedOptions {
   service: string;
   mode: 'monitor' | 'enforce';
   runDir: string;
-  trustProxy: boolean | string[];
+  trustProxy: TrustProxyOption;
   allowlist: string[];
   disabled: boolean;
+  telemetry: { dir: string; sources: TelemetrySource[] } | null;
 }
 
 export interface ResolvedConfig {

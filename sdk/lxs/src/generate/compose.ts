@@ -3,6 +3,8 @@ import { GENERATED_HEADER, IMAGE_TAG } from '../version.js';
 import { COWRIE_BASE } from './cowrie.js';
 
 export const COMPOSE_FILE = 'lxs.compose.yml';
+/** Where ds-agent finds firewall.jsonl / auth.jsonl (its LXS_TELEMETRY_DIR default). */
+export const TELEMETRY_MOUNT = '/var/log/lxs/telemetry';
 
 const sanitize = (id: string): string => id.replace(/[^a-z0-9]+/g, '_');
 
@@ -80,6 +82,14 @@ export function renderCompose(cfg: ResolvedConfig): string {
     '      - ./.lxs/manifest.json:/etc/lxs/manifest.json:ro',
     '      - ./.lxs/secrets/honeytokens.json:/etc/lxs/honeytokens.json:ro',
   );
+  const tel = cfg.options.telemetry;
+  if (tel) {
+    // A bare relative name would be a named volume to compose, so anchor it to the project dir.
+    const host = /^[./~]/.test(tel.dir) ? tel.dir : `./${tel.dir}`;
+    push(
+      `      - ${host}:${TELEMETRY_MOUNT}:ro   # production telemetry (${tel.sources.join(', ')})`,
+    );
+  }
 
   if (hasWeb) {
     push(

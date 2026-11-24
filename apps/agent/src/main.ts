@@ -12,7 +12,7 @@ import {
 import { PlatformClient, type RegisterResponse } from './platform.js';
 import { loadHoneytokenHashes, PolicyPoller, PolicyStore } from './policy.js';
 import { Shipper } from './ship.js';
-import { TailManager, type TailSource } from './tail.js';
+import { TailManager, type TailSource, telemetryTailSources } from './tail.js';
 import { Counters, createLogger, registerSecret } from './telemetry.js';
 
 interface ManifestDecoy {
@@ -27,6 +27,8 @@ interface Manifest {
   assets?: unknown[];
   honeytokens?: Array<{ id: string; kind: string; planted_in?: string[] }>;
   posture?: Record<string, unknown>;
+  /** Present when decoy.config declares `telemetry`; lists which production logs to tail. */
+  telemetry?: { sources?: string[] };
 }
 
 const readJson = <T>(file: string): T | null => {
@@ -231,6 +233,20 @@ async function main(): Promise<void> {
       });
   }
 
+  const telemetryKinds = Array.isArray(manifest.telemetry?.sources)
+    ? manifest.telemetry.sources
+    : cfg.telemetryFromEnv
+      ? ['firewall', 'auth']
+      : [];
+  const telemetrySources = telemetryTailSources(telemetryKinds, cfg.telemetryDir);
+  sources.push(...telemetrySources);
+  if (telemetrySources.length > 0) {
+    log.info('tailing production telemetry', {
+      dir: cfg.telemetryDir,
+      sources: telemetrySources.map((s) => s.telemetry),
+    });
+  }
+
   tail = new TailManager({
     sources,
     statePath: path.join(cfg.stateDir, 'offsets.json'),
@@ -239,6 +255,7 @@ async function main(): Promise<void> {
     onLine: (l) => {
       for (const ev of normalizer.normalize({
         source: l.source.kind,
+        ...(l.source.telemetry ? { telemetry: l.source.telemetry } : {}),
         decoyId: l.source.decoyId,
         fileKey: path.basename(path.dirname(l.file)) + '/' + path.basename(l.file),
         offset: l.offset,

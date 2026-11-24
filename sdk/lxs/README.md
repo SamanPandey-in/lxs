@@ -44,11 +44,49 @@ hint for JavaScript users. A declarative alternative is `defineConfig({ decoys: 
 
 Per request, in order: skip if disabled or the source is allow-listed; return a generic 403 if the source is on the
 polled blocklist (`mode: 'enforce'` only); proxy declared decoy paths to `ds-web` over a Unix socket (a named pipe on
-Windows) with `Cookie` and `Authorization` stripped; report use of a planted honeytoken; report `asset.access` when a
-watch-listed source touches a declared asset. Everything else is a handful of `Set` lookups and `next()`.
+Windows) with `Authorization` stripped and every cookie stripped except the decoy's own session cookie
+(`PHPSESSID`, forwarded only in the exact format `ds-web` issues); report use of a planted honeytoken; report
+`asset.access` when a watch-listed source touches a declared asset. Everything else is a handful of `Set` lookups and
+`next()`.
 
 It fails open: an unreachable agent never breaks the app, an unreachable decoy yields a generic 404 on decoy paths only.
-`X-Forwarded-For` is ignored unless `trustProxy` lists the proxy.
+
+## Client IP and `trustProxy`
+
+By default the client is the socket address and `X-Forwarded-For` is ignored, because the client can write anything
+into it. Behind a reverse proxy, tell the SDK which hops to trust:
+
+| `trustProxy` | Client address |
+|---|---|
+| `false` (default) | the socket address |
+| a hop count, e.g. `1` | walk `[...X-Forwarded-For, socket]` from the right and take the address just beyond the last of the `n` trusted hops. `1` = one proxy (nginx, a cloud load balancer) in front of the app. Only safe if the app cannot be reached except through those proxies. |
+| a list, e.g. `['loopback']`, `['10.0.0.0/8']` | only if the socket peer is in the list: walk `X-Forwarded-For` from the right, skipping listed addresses; the first unlisted one is the client. Named ranges: `loopback`, `uniquelocal`, `linklocal`. |
+
+`trustProxy: true` is rejected (`E_TRUST_PROXY`): it would make the leftmost entry the client, which an attacker
+sets to any address, evading blocks or getting someone else blocked. A `/0` entry (`0.0.0.0/0`, `::/0`) is rejected in
+`trustProxy` for the same reason, and in `allowlist` because it would disable blocking entirely (`E_OPTIONS`). The
+middleware also ignores a `/0` entry in the allowlist it polls from the platform.
+
+### Migrating from `trustProxy: true` (0.2.0)
+
+Replace it with the number of proxies in front of the app (usually `trustProxy: 1`), or with the proxies' addresses
+(`trustProxy: ['loopback']` when nginx runs on the same host, `['uniquelocal']` or a CIDR such as `['10.0.0.0/8']`
+for a load balancer in a private network).
+
+## Production telemetry
+
+`telemetry: { dir: './telemetry' }` mounts a host directory read-only into `ds-agent`, which tails `firewall.jsonl`
+and `auth.jsonl` there (restrict with `sources: ['firewall']`) and reports them as `prod.firewall` / `prod.auth`
+events, so the platform can correlate decoy attackers with touches on real assets that are not HTTP routes. One JSON
+object per line:
+
+```jsonl
+{"ts":"2026-11-01T10:43:21Z","src_ip":"203.0.113.66","dst_ip":"10.0.1.20","dst_port":443,"proto":"tcp","action":"allow","asset":"Payments API"}
+{"ts":"2026-11-01T10:43:24Z","src_ip":"203.0.113.66","user":"admin","service":"payments-api","result":"success","asset":"Payments API"}
+```
+
+`action` is `allow|accept|deny|drop|reject`, `result` is `success|failure`; `asset` (optional) names the real asset.
+A denied connection is recorded but is not treated as a touch on the asset.
 
 ## CLI
 
@@ -65,7 +103,7 @@ is missing from `docker-compose.yml`, or if anything resembling an ingest key (`
 
 `E_OPTIONS`, `E_MOUNT_TYPE`, `E_MOUNT_INVALID`, `E_MOUNT_RESERVED`, `E_MOUNT_COLLISION`, `E_ID_COLLISION`,
 `E_PORT_TYPE`, `E_PORT_RANGE`, `E_PORT_COLLISION`, `E_TEMPLATE_UNKNOWN`, `E_ASSET_PATTERN`, `E_ASSET_DUPLICATE`,
-`E_TYPE_UNKNOWN`, `E_NO_DECOYS`, `E_UNSUPPORTED`, `E_SERVICE_MISSING`, `E_NOT_GITIGNORED`, `E_KEY_IN_CONFIG`,
+`E_TYPE_UNKNOWN`, `E_TRUST_PROXY`, `E_NO_DECOYS`, `E_UNSUPPORTED`, `E_SERVICE_MISSING`, `E_NOT_GITIGNORED`, `E_KEY_IN_CONFIG`,
 `E_CONFIG_NOT_FOUND`, `E_CONFIG_EXPORT`, `E_COMPOSE_INVALID`. Each `LXSConfigError` has `code` and `hint`.
 
 ## Testing your app with the middleware mounted

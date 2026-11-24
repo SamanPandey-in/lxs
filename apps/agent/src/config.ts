@@ -14,6 +14,10 @@ export interface AgentConfig {
   commonCredsPath: string;
   hostname: string;
   markSimulated: boolean;
+  /** Directory with production firewall.jsonl / auth.jsonl (mounted by `lxs build` when declared). */
+  telemetryDir: string;
+  /** LXS_TELEMETRY_DIR was set explicitly: tail both files even if the manifest does not declare them. */
+  telemetryFromEnv: boolean;
   /** Overrides from the platform's register response may replace these. */
   heartbeatSeconds: number;
   policyPollSeconds: number;
@@ -38,6 +42,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     commonCredsPath: env.LXS_COMMON_CREDS ?? '/etc/lxs/common-creds.txt',
     hostname: env.LXS_SENSOR_HOSTNAME ?? os.hostname(),
     markSimulated: env.LXS_MARK_SIMULATED === '1',
+    telemetryDir: env.LXS_TELEMETRY_DIR?.trim() || '/var/log/lxs/telemetry',
+    telemetryFromEnv: Boolean(env.LXS_TELEMETRY_DIR?.trim()),
     heartbeatSeconds: 30,
     policyPollSeconds: 10,
     maxBatch: 500,

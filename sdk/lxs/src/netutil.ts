@@ -63,6 +63,13 @@ export function parseCidr(spec: string): CidrMatcher | null {
   return (ip) => ip.v === base.v && ip.n >> shift === prefix;
 }
 
+/** True for a valid CIDR whose prefix length is 0 (0.0.0.0/0, ::/0): it matches every address. */
+export function isMatchAll(spec: string): boolean {
+  const slash = spec.indexOf('/');
+  if (slash < 0 || !parseCidr(spec)) return false;
+  return Number.parseInt(spec.slice(slash + 1), 10) === 0;
+}
+
 const NAMED: Record<string, string[]> = {
   loopback: ['127.0.0.0/8', '::1/128'],
   uniquelocal: ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'],
