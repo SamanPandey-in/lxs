@@ -96,6 +96,8 @@ export function loadHoneytokenHashes(file: string): Record<string, string> {
 export class PolicyStore {
   private remote: RemotePolicy = { version: 0, blocklist: [], watchlist: [], allowlist: [] };
   private readonly local = new Map<string, number>(); // ip -> expiry
+  /** Per-visitor tokens registered from ds-web mint lines (sha256 -> mint id). */
+  private readonly minted = new Map<string, string>();
   private rev = 1;
 
   constructor(
@@ -121,6 +123,13 @@ export class PolicyStore {
     if (!had) this.rev++;
   }
 
+  /** Recognise one more token (a per-visitor mint). Bumps the revision so the SDK refetches. */
+  addHoneytoken(hash: string, id: string): void {
+    if (!/^[0-9a-f]{64}$/.test(hash) || this.minted.get(hash) === id) return;
+    this.minted.set(hash, id);
+    this.rev++;
+  }
+
   private prune(): void {
     const t = this.now();
     for (const [ip, exp] of this.local) if (exp < t) this.local.delete(ip);
@@ -137,7 +146,10 @@ export class PolicyStore {
         .map((b) => b.ip),
       watchlist: [...watch],
       allowlist: this.remote.allowlist,
-      honeytokens: this.honeytokens,
+      honeytokens:
+        this.minted.size === 0
+          ? this.honeytokens
+          : { ...Object.fromEntries(this.minted), ...this.honeytokens },
       revision: this.rev,
     };
   }

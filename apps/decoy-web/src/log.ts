@@ -9,7 +9,7 @@ import path from 'node:path';
 export interface LogLine {
   ts: string;
   decoy_id: string;
-  kind: 'request' | 'login' | 'bait' | 'export' | 'start' | 'dropped';
+  kind: 'request' | 'login' | 'bait' | 'export' | 'mint' | 'start' | 'dropped';
   ip: string;
   method: string;
   path: string;
@@ -23,6 +23,10 @@ export interface LogLine {
   file?: string;
   honeytoken_id?: string;
   honeytoken_ids?: string[];
+  /** `mint` lines: the per-visitor token id (<base id>.<tag>) handed to this visitor. */
+  mint_id?: string;
+  /** The decoy session cookie the token was minted for (absent: minted for the IP alone). */
+  session_id?: string;
   body?: string;
   bytes?: number;
   count?: number;

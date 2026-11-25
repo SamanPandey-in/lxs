@@ -9,6 +9,13 @@ import { decoys, events, sensors } from '../db/schema.js';
 import { env } from '../env.js';
 import { enqueueProcessSources } from '../jobs/queue.js';
 import { HttpError, invalid } from '../lib/errors.js';
+import {
+  loadAttributions,
+  markMintsUsed,
+  splitMintEvents,
+  storeMints,
+  usedMintIds,
+} from '../lib/honeytoken-attribution.js';
 import { parse } from '../lib/parse.js';
 import { requireIngestKey } from '../plugins/bearer-key.js';
 import * as metrics from '../plugins/metrics.js';
@@ -117,7 +124,13 @@ export async function ingestEvents(opts: {
 
   const sensorId = await resolveIngestSensor(opts);
 
-  const keys = [...new Set(valid.map((e) => e.decoy_id).filter((k): k is string => !!k))];
+  // Per-visitor honeytoken mints go to honeytoken_mints, never into the event stream.
+  const split = splitMintEvents(valid);
+  const mints = split.mints;
+  const streamEvents = split.events;
+  const mintedUses = usedMintIds(streamEvents);
+
+  const keys = [...new Set(streamEvents.map((e) => e.decoy_id).filter((k): k is string => !!k))];
   const decoyMap = new Map<string, string>();
   if (keys.length) {
     const rows = await db
@@ -128,7 +141,7 @@ export async function ingestEvents(opts: {
       if (!decoyMap.has(r.key) || r.sensorId === sensorId) decoyMap.set(r.key, r.id);
   }
 
-  const rows = valid.map((e) => {
+  const rows = streamEvents.map((e) => {
     const fields: Record<string, unknown> = {
       sensor_kind: e.sensor,
       decoy_key: e.decoy_id,
@@ -180,20 +193,42 @@ export async function ingestEvents(opts: {
 
   const eventIds: string[] = [];
   const inserted: { id: string; srcIp: string }[] = [];
+  let mintsStored = 0;
   try {
     await db.transaction(async (tx) => {
+      if (mints.length) mintsStored = await storeMints(tx, opts.projectId, mints);
+      // A used per-visitor token: attach who it was minted for (evidence only; scores unchanged).
+      if (mintedUses.length) {
+        const found = await loadAttributions(tx, opts.projectId, mintedUses);
+        for (const r of unique) {
+          const id = r.fields.honeytoken_id as string | undefined;
+          const a = r.eventType === 'honeytoken.use' && id ? found.get(id) : undefined;
+          if (a) r.fields.honeytoken_attribution = a;
+        }
+      }
+      const usedNow: Array<{ mintId: string; srcIp: string; at: Date }> = [];
       for (let i = 0; i < unique.length; i += 200) {
         const chunk = unique.slice(i, i + 200);
+        if (chunk.length === 0) continue;
         const rowsOut = await tx
           .insert(events)
           .values(chunk)
           .onConflictDoNothing({ target: [events.projectId, events.eventUid] })
-          .returning({ id: events.id, srcIp: events.srcIp });
+          .returning({ id: events.id, srcIp: events.srcIp, eventUid: events.eventUid });
         for (const r of rowsOut) {
           eventIds.push(r.id);
-          inserted.push(r);
+          inserted.push({ id: r.id, srcIp: r.srcIp });
+        }
+        if (mintedUses.length) {
+          const fresh = new Set(rowsOut.map((r) => r.eventUid));
+          for (const r of chunk) {
+            const a = r.fields.honeytoken_attribution as { mint_id: string } | undefined;
+            if (a && fresh.has(r.eventUid))
+              usedNow.push({ mintId: a.mint_id, srcIp: r.srcIp, at: r.occurredAt });
+          }
         }
       }
+      if (usedNow.length) await markMintsUsed(tx, opts.projectId, usedNow);
     });
   } catch {
     throw new HttpError(503, 'unavailable', 'Storage unavailable; keep buffering and retry');
@@ -210,8 +245,8 @@ export async function ingestEvents(opts: {
   if (inserted.length) await enqueueProcessSources(opts.projectId, inserted);
 
   return {
-    accepted: eventIds.length,
-    duplicates: valid.length - eventIds.length,
+    accepted: eventIds.length + mintsStored,
+    duplicates: valid.length - eventIds.length - mintsStored,
     rejected,
     eventIds,
   };

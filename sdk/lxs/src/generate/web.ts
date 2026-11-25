@@ -1,11 +1,14 @@
+import { companionPaths } from '../bait-assets.js';
 import type { ResolvedConfig, SshSpec } from '../types.js';
 import { SDK_VERSION } from '../version.js';
+import type { BaitValues } from './bait.js';
 
 /**
  * .lxs/web-decoys.json: the only input ds-web needs. No secrets: it carries brand names, mounts,
- * accepted *bait* credentials and breadcrumb targets. Honeytoken values arrive via the mounted secrets file.
+ * accepted *bait* credentials, breadcrumb targets and the per-build bait values (banners, a fake APP_KEY,
+ * timestamps). Honeytoken values arrive via the mounted secrets file.
  */
-export function renderWebDecoys(cfg: ResolvedConfig): string {
+export function renderWebDecoys(cfg: ResolvedConfig, bait?: BaitValues): string {
   const ssh = cfg.decoys.find((d): d is SshSpec => d.type === 'ssh');
   const decoys = cfg.decoys.flatMap(
     (d): Array<Record<string, unknown> & { type: string; mount: string }> => {
@@ -30,6 +33,9 @@ export function renderWebDecoys(cfg: ResolvedConfig): string {
             mount: d.mount,
             template: d.template,
             breadcrumbs: d.breadcrumbs,
+            ...(companionPaths(d.template, d.mount).length
+              ? { assets: companionPaths(d.template, d.mount) }
+              : {}),
           },
         ];
       }
@@ -45,6 +51,7 @@ export function renderWebDecoys(cfg: ResolvedConfig): string {
       ssh: ssh ? { host: ssh.hostname, port: ssh.port, user: 'deploy' } : null,
       adminMount: decoys.find((d) => d.type === 'web-admin')?.mount ?? null,
     },
+    ...(bait ? { bait } : {}),
   };
   return `${JSON.stringify(doc, null, 2)}\n`;
 }

@@ -8,6 +8,29 @@ export type { ChainResult, DetectionContext, EventTag };
 export interface DetectionModule {
   tagEvent(event: DecoyEvent, ctx: DetectionContext): EventTag;
   evaluateChain(events: DecoyEvent[], ctx: DetectionContext): ChainResult;
+  /** Present in @lxs/detection; the fallback has none (published thresholds only). */
+  jitterThresholds?: (seed: string, pct?: number) => Record<string, number>;
+}
+
+/**
+ * Opt-in per-deployment threshold jitter. Unset LXS_DETECTION_JITTER_SEED (tests, the demo, the
+ * default): no `thresholds` in the context, so every rule uses the published values. Set: each
+ * project gets its own thresholds, +/- LXS_DETECTION_JITTER_PCT (0.10-0.20, default 0.15).
+ */
+export function detectionThresholds(
+  mod: DetectionModule,
+  projectId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<DetectionContext, 'thresholds'> {
+  const seed = env.LXS_DETECTION_JITTER_SEED?.trim();
+  if (!seed || !mod.jitterThresholds) return {};
+  const pct = Number(env.LXS_DETECTION_JITTER_PCT);
+  return {
+    thresholds: mod.jitterThresholds(
+      `${seed}|${projectId}`,
+      Number.isFinite(pct) && pct > 0 ? pct : undefined,
+    ),
+  };
 }
 
 let mod: DetectionModule | null = null;

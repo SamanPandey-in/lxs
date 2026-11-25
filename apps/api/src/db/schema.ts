@@ -488,6 +488,34 @@ export const honeytokens = pgTable(
   (t) => [uniqueIndex('honeytokens_project_sha_uq').on(t.projectId, t.valueSha256)],
 );
 
+/**
+ * Per-visitor honeytokens: which visitor each minted token was handed to (from ds-web `mint`
+ * lines, ingested as `honeytoken.mint` events), and where it was first used. Values are never
+ * stored; the id (`<base id>.<tag>`) is what the SDK reports when the token comes back.
+ */
+export const honeytokenMints = pgTable(
+  'honeytoken_mints',
+  {
+    id: pk(),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    mintId: text('mint_id').notNull(),
+    baseTokenId: text('base_token_id').notNull(),
+    decoyKey: text('decoy_key'),
+    sessionId: text('session_id'),
+    mintedForIp: inet('minted_for_ip').notNull(),
+    plantedVia: text('planted_via').notNull(),
+    mintedAt: ts('minted_at').notNull(),
+    firstUsedAt: ts('first_used_at'),
+    lastUsedAt: ts('last_used_at'),
+    usedFromIp: inet('used_from_ip'),
+    useCount: integer('use_count').notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex('honeytoken_mints_project_mint_uq').on(t.projectId, t.mintId)],
+);
+
 export const incidentNotes = pgTable(
   'incident_notes',
   {

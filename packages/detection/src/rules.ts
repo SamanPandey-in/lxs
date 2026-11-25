@@ -1,6 +1,7 @@
 import type { DecoyEvent, Detection, KillChainStage, Severity, Technique } from '@lxs/schema';
 import { mergeTechniques, tech } from './attack-map.js';
 import { laterStage } from './killchain.js';
+import { PUBLISHED_THRESHOLDS, type Thresholds } from './thresholds.js';
 
 /* -------------------------------------------------------------------------- */
 /* Context                                                                    */
@@ -15,6 +16,11 @@ export interface DetectionContext {
   criticalAssets: string[];
   /** Detections already stored for this incident; once-only rules and floors stay sticky. */
   existingDetections?: Detection[];
+  /**
+   * Per-deployment thresholds (thresholds.ts). Absent: the published values, which is what the
+   * golden tests and the demo use. Only counts and windows move; points never do.
+   */
+  thresholds?: Thresholds;
 }
 
 /** Parse the text of common-creds.txt (pure; the caller does the file I/O). */
@@ -484,14 +490,17 @@ export function median(xs: number[]): number {
  * Human cadence: >= 3 interactive actions (shell / db commands), median gap >= 1.5 s,
  * and variable gaps (a metronome-like script is not human).
  */
-export function humanCadence(commands: DecoyEvent[]): { human: boolean; evidence: string[] } {
+export function humanCadence(
+  commands: DecoyEvent[],
+  minMedianGapMs: number = HUMAN_MIN_MEDIAN_GAP_MS,
+): { human: boolean; evidence: string[] } {
   if (commands.length < 3) return { human: false, evidence: [] };
   const times = commands.map(eventTime);
   const gaps: number[] = [];
   for (let i = 1; i < times.length; i++) gaps.push((times[i] as number) - (times[i - 1] as number));
   const med = median(gaps);
   const spread = Math.max(...gaps) - Math.min(...gaps);
-  const human = med >= HUMAN_MIN_MEDIAN_GAP_MS && spread >= Math.max(250, 0.15 * med);
+  const human = med >= minMedianGapMs && spread >= Math.max(250, 0.15 * med);
   return { human, evidence: commands.slice(0, 5).map((e) => e.id) };
 }
 
@@ -521,6 +530,8 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
   const out: Detection[] = [];
   const dec = sorted.filter((e) => e.is_decoy);
   if (dec.length === 0) return out;
+  const th = ctx.thresholds ?? PUBLISHED_THRESHOLDS;
+  const secs = (ms: number): string => `${Math.round(ms / 100) / 10}`;
 
   // R01: touched any decoy.
   const first = dec[0] as DecoyEvent;
@@ -541,14 +552,14 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
     for (let hi = 0; hi < dec.length; hi++) {
       const h = dec[hi] as DecoyEvent;
       counts.set(h.dst_service, (counts.get(h.dst_service) ?? 0) + 1);
-      while (eventTime(h) - eventTime(dec[lo] as DecoyEvent) > WINDOW_60S) {
+      while (eventTime(h) - eventTime(dec[lo] as DecoyEvent) > th.sweepWindowMs) {
         const l = dec[lo] as DecoyEvent;
         const c = (counts.get(l.dst_service) ?? 1) - 1;
         if (c <= 0) counts.delete(l.dst_service);
         else counts.set(l.dst_service, c);
         lo++;
       }
-      if (counts.size >= 3) {
+      if (counts.size >= th.sweepDistinct) {
         const seen = new Set<string>();
         const ev: string[] = [];
         for (let i = lo; i <= hi; i++) {
@@ -562,7 +573,7 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
           det(
             'R02',
             5,
-            `Sweep: ${counts.size} distinct decoys/paths within 60 s`,
+            `Sweep: ${counts.size} distinct decoys/paths within ${secs(th.sweepWindowMs)} s`,
             [tech('T1595.003', 0.8), tech('T1046', 0.8)],
             ev,
           ),
@@ -597,16 +608,16 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
     for (let hi = 0; hi < fails.length; hi++) {
       const h = fails[hi] as DecoyEvent;
       sum += h.count;
-      while (eventTime(h) - eventTime(fails[lo] as DecoyEvent) > WINDOW_60S) {
+      while (eventTime(h) - eventTime(fails[lo] as DecoyEvent) > th.bruteforceWindowMs) {
         sum -= (fails[lo] as DecoyEvent).count;
         lo++;
       }
-      if (sum >= 5) {
+      if (sum >= th.bruteforceFailures) {
         out.push(
           det(
             'R04',
             10,
-            `${sum} failed logins within 60 s`,
+            `${sum} failed logins within ${secs(th.bruteforceWindowMs)} s`,
             [tech('T1110.001', 0.9)],
             fails.slice(lo, hi + 1).map((e) => e.id),
           ),
@@ -674,7 +685,7 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
     }
     for (const list of bySession.values()) {
       const n = list.reduce((s, e) => s + e.count, 0);
-      if (n >= 3) {
+      if (n >= th.sessionCommands) {
         out.push(
           det(
             'R07',
@@ -808,15 +819,23 @@ export function runDecoyRules(sorted: DecoyEvent[], ctx: DetectionContext): Dete
 
   // R13: human cadence (label signal, 0 points).
   {
-    const h = humanCadence(commands);
+    const h = humanCadence(commands, th.humanMedianGapMs);
     if (h.human)
-      out.push(det('R13', 0, 'Human cadence: variable gaps, median >= 1.5 s', [], h.evidence));
+      out.push(
+        det(
+          'R13',
+          0,
+          `Human cadence: variable gaps, median >= ${secs(th.humanMedianGapMs)} s`,
+          [],
+          h.evidence,
+        ),
+      );
   }
   for (let i = 1; i < sorted.length; i++) {
     const prev = sorted[i - 1] as DecoyEvent;
     const cur = sorted[i] as DecoyEvent;
     const gap = eventTime(cur) - eventTime(prev);
-    if (gap > IDLE_REVISIT_MS) {
+    if (gap > th.revisitIdleMs) {
       out.push(
         det(
           'R14',

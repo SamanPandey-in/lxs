@@ -37,9 +37,10 @@ Usage:
                                                        LXS_INGEST_KEY for CI. The key only goes to .env.lxs
   lxs doctor [--json]                          Check Docker, compose, ports, config, .env.lxs, endpoint, key,
                                                        images and build freshness; one fix per failure
-  lxs build [--config <file>] [--out <file>] [--check]
+  lxs build [--config <file>] [--out <file>] [--check] [--reseed]
                                                        Compile decoy.config.ts or lxs.yaml into lxs.compose.yml + .lxs/
                                                        --check exits 1 if committed output is stale (for CI)
+                                                       --reseed draws new per-build bait values (banners, keys, dates)
   lxs selftest [--report]                      Prove containment with docker inspect / docker exec probes
   lxs --version
 `;
@@ -73,6 +74,7 @@ export async function main(argv: string[]): Promise<number> {
           config: str('config'),
           out: str('out'),
           check: flags.has('check'),
+          reseed: flags.has('reseed'),
         });
       case 'selftest': {
         const r = await runSelftest({ cwd: process.cwd(), report: flags.has('report') });

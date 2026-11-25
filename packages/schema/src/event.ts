@@ -14,6 +14,9 @@ export const EventType = z.enum([
   'db.command',
   'honeytoken.read',
   'honeytoken.use',
+  // A per-visitor honeytoken was handed out (ds-web `mint` line). The platform stores it in its
+  // token-to-visitor mapping instead of the event stream, so it never reaches detection.
+  'honeytoken.mint',
   'asset.access',
   'asset.blocked',
   'prod.firewall',

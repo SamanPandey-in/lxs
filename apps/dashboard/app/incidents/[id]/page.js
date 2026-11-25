@@ -21,6 +21,7 @@ import {
 import Link from "next/link";
 import { useParams, usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
+import { HoneytokenAttribution } from "@/components/honeytoken-attribution";
 import { KillChain } from "@/components/killchain";
 import {
   Badge,
@@ -1236,6 +1237,8 @@ function IncidentDetail() {
             </Tabs>
           </Card>
         </section>
+
+        <HoneytokenAttribution events={events} />
 
         <AuditTrail rows={audit} number={inc.number} incidentId={inc.id} />
       </div>

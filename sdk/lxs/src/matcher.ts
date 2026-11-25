@@ -1,3 +1,4 @@
+import { companionPaths } from './bait-assets.js';
 import type { AssetSpec, DecoySpec, Path } from './types.js';
 
 /** Path without the query string, percent-decoded once, trailing slash removed. */
@@ -32,6 +33,16 @@ export class DecoyMatcher {
       if (d.type === 'web-admin') {
         this.exact.set(d.mount, { id: d.id, mount: d.mount });
         this.prefixes.push({ id: d.id, mount: d.mount, pre: d.mount + '/' });
+      }
+    }
+    // Second-order asset paths of a bait (bait-assets.ts) route to the same decoy. A declared decoy
+    // path or anything under a web-admin mount always wins over a companion.
+    for (const d of decoys) {
+      if (d.type !== 'web-bait') continue;
+      for (const p of companionPaths(d.template, d.mount)) {
+        if (this.exact.has(p)) continue;
+        if (this.prefixes.some((x) => p === x.mount || p.startsWith(x.pre))) continue;
+        this.exact.set(p, { id: d.id, mount: d.mount });
       }
     }
   }

@@ -1,8 +1,17 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
-import type { HoneytokenSet, WebDecoyConfig, WebDecoysFile } from './config.js';
+import { type AssetSkin, assetTable, type StaticAsset, staticHeaders } from './assets.js';
+import {
+  type BaitValues,
+  type HoneytokenSet,
+  resolveBait,
+  type WebDecoyConfig,
+  type WebDecoysFile,
+} from './config.js';
+import type { Jitter, JitterSkin } from './jitter.js';
 import type { JsonlLogger, LogLine } from './log.js';
 import { LruTtlMap } from './lru.js';
+import { mintToken, parseMintSecret } from './mint.js';
 import * as tpl from './templates.js';
 
 export interface ServerDeps {
@@ -12,6 +21,13 @@ export interface ServerDeps {
   now?: () => number;
   /** Capacity of each per-source state map (default 5000). Exposed for tests. */
   maxTracked?: number;
+  /** Response-time jitter (jitter.ts). Absent or null: answer immediately (tests). */
+  jitter?: Jitter | null;
+  /**
+   * Mint a unique API-key honeytoken per visitor session when the honeytoken file carries a mint
+   * secret (the default). `false` always serves the static per-deployment token.
+   */
+  perVisitorTokens?: boolean;
 }
 
 const MAX_BODY = 16 * 1024; // BREAKDOWN 7.11
@@ -117,16 +133,82 @@ const pick = (b: Record<string, string>, names: string[]): string | undefined =>
   return undefined;
 };
 
+/** Kept on non-page responses (429/413/405 text) and the error handler. */
 const SECURITY_HEADERS: Record<string, string> = {
   'cache-control': 'no-store',
   'x-content-type-options': 'nosniff',
-  'referrer-policy': 'no-referrer',
-  'content-security-policy':
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
 };
+
+/**
+ * Response headers per skin. A real product's headers are part of its fingerprint as much as its
+ * markup: one strict header set on every decoy page was itself a tell.
+ */
+function pageHeaders(skin: tpl.Skin, bait: BaitValues, now: number): Record<string, string> {
+  switch (skin) {
+    case 'admin':
+      return {
+        'cache-control': 'no-cache, private',
+        'x-frame-options': 'SAMEORIGIN',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy':
+          "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'self'",
+      };
+    case 'wordpress':
+      return {
+        expires: 'Wed, 11 Jan 1984 05:00:00 GMT',
+        'cache-control': 'no-cache, must-revalidate, max-age=0, no-store, private',
+        'x-frame-options': 'SAMEORIGIN',
+        'referrer-policy': 'strict-origin-when-cross-origin',
+        'x-powered-by': `PHP/${bait.versions.php}`,
+      };
+    case 'phpmyadmin':
+      return {
+        'x-frame-options': 'DENY',
+        'referrer-policy': 'no-referrer',
+        'x-robots-tag': 'noindex, nofollow',
+        'x-content-type-options': 'nosniff',
+        'cache-control':
+          'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
+        pragma: 'no-cache',
+        expires: new Date(now).toUTCString(),
+        'content-security-policy':
+          "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'",
+        'x-powered-by': `PHP/${bait.versions.php}`,
+      };
+    default:
+      return {};
+  }
+}
+
+type BaitTemplate = NonNullable<WebDecoyConfig['template']>;
+
+/** Directory the template's second-order assets hang off (mirrors sdk/lxs/src/bait-assets.ts). */
+function assetBase(template: BaitTemplate, mount: string): string {
+  const dir = mount.slice(0, mount.lastIndexOf('/'));
+  if (template === 'phpmyadmin') return mount.endsWith('.php') ? dir : mount;
+  return dir;
+}
+
+const skinOfTemplate = (t: BaitTemplate): tpl.Skin =>
+  t === 'wp-login' ? 'wordpress' : t === 'phpmyadmin' ? 'phpmyadmin' : 'nginx';
+
+const assetSkinOf = (t: BaitTemplate): AssetSkin =>
+  t === 'wp-login' ? 'wordpress' : t === 'phpmyadmin' ? 'phpmyadmin' : 'git';
 
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const now = deps.now ?? Date.now;
+  const bait = resolveBait(deps.decoys.bait);
+  const jitter = deps.jitter ?? null;
+  const mintSecret =
+    deps.perVisitorTokens === false ? null : parseMintSecret(deps.honeytokens.mint_secret);
+  const service = deps.decoys.service ?? 'app';
+  const siteName = service.replace(/[-_]+/g, ' ').replace(/\b[a-z]/g, (c) => c.toUpperCase());
+  const env = (): tpl.PageEnv => ({
+    bait,
+    service,
+    now: now(),
+    nonce: (n) => randomBytes(n).toString('hex'),
+  });
   const app = Fastify({
     logger: false,
     trustProxy: false,
@@ -149,6 +231,9 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     for (const d of decoys) {
       if (path === d.mount) return d;
       if (d.type === 'web-admin' && path.startsWith(`${d.mount}/`)) return d;
+    }
+    for (const d of decoys) {
+      if (d.type === 'web-bait' && Array.isArray(d.assets) && d.assets.includes(path)) return d;
     }
     return undefined;
   };
@@ -180,6 +265,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return true;
   };
 
+  /** Plain responses (throttling, 413, 405 text): immediate, no skin. */
   const send = (
     reply: FastifyReply,
     status: number,
@@ -191,6 +277,75 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     return reply.send(body);
   };
 
+  /** Canned responses: the skin's headers, then the body after a realistic delay (jitter.ts). */
+  const respond = (
+    reply: FastifyReply,
+    skin: JitterSkin,
+    status: number,
+    type: string,
+    body: string | Buffer,
+    headers: Record<string, string> = {},
+  ): FastifyReply => {
+    reply.code(status).headers({ 'content-type': type, ...headers });
+    const wait = jitter ? jitter.delay(skin) : 0;
+    if (wait <= 0) return reply.send(body);
+    const t = setTimeout(() => {
+      if (!reply.sent) reply.send(body);
+    }, wait);
+    reply.raw.once('close', () => clearTimeout(t));
+    return reply;
+  };
+
+  const page = (
+    reply: FastifyReply,
+    skin: tpl.Skin,
+    status: number,
+    html: string,
+    extra: Record<string, string> = {},
+  ): FastifyReply =>
+    respond(reply, skin, status, 'text/html; charset=UTF-8', html, {
+      ...pageHeaders(skin, bait, now()),
+      ...extra,
+    });
+
+  const redirect = (reply: FastifyReply, skin: tpl.Skin, location: string): FastifyReply =>
+    respond(reply, skin, 302, 'text/html; charset=UTF-8', '', {
+      ...pageHeaders(skin, bait, now()),
+      location,
+    });
+
+  const nginxPage = (reply: FastifyReply, status: 403 | 404 | 405): FastifyReply =>
+    respond(reply, 'nginx', status, 'text/html', tpl.nginxError(status, bait), {
+      server: `nginx/${bait.versions.nginx}`,
+    });
+
+  /** Each product's own 404 (or 403): the WordPress theme, Apache for phpMyAdmin, nginx for files. */
+  const errorPage = (
+    reply: FastifyReply,
+    skin: tpl.Skin,
+    status: 403 | 404,
+    wpBase = '',
+  ): FastifyReply => {
+    if (skin === 'admin') return page(reply, 'admin', status, tpl.adminError(status));
+    if (skin === 'wordpress' && status === 404)
+      return page(reply, 'wordpress', 404, tpl.wp404({ base: wpBase, site: siteName }, env()));
+    if (skin === 'phpmyadmin')
+      return respond(
+        reply,
+        'phpmyadmin',
+        status,
+        'text/html; charset=iso-8859-1',
+        tpl.apacheError(status, bait),
+      );
+    return nginxPage(reply, status);
+  };
+
+  const asset = (reply: FastifyReply, a: StaticAsset, method: string): FastifyReply =>
+    respond(reply, 'asset', 200, a.type, method === 'HEAD' ? '' : a.body, {
+      ...staticHeaders(a.body, bait),
+      ...(a.cache ? { 'cache-control': a.cache } : {}),
+    });
+
   app.setNotFoundHandler((req: FastifyRequest, reply: FastifyReply) => {
     const ip = sanitizeIp(req.headers['x-ds-client-ip']);
     const reqId =
@@ -201,7 +356,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     const decoy = find(path);
     // Only trust the decoy id the SDK attached if it is one we declared; otherwise use the path match.
     const hinted = clip(req.headers['x-ds-decoy-id'] as string | undefined, 64);
-    const decoyId = decoy?.id ?? (decoys.some((d) => d.id === hinted) ? (hinted as string) : '-');
+    const hintedDecoy = decoys.find((d) => d.id === hinted);
+    const decoyId = decoy?.id ?? hintedDecoy?.id ?? '-';
     const base: LogLine = {
       ts: new Date(now()).toISOString(),
       decoy_id: decoyId,
@@ -244,7 +400,14 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     }
 
     if (!decoy) {
-      return done(send(reply, 404, 'text/html; charset=utf-8', tpl.NOT_FOUND), 404);
+      // Routed here but claimed by no decoy: answer with the hinted decoy's own 404 look.
+      const skin: tpl.Skin =
+        hintedDecoy?.type === 'web-admin'
+          ? 'admin'
+          : hintedDecoy?.type === 'web-bait'
+            ? skinOfTemplate(hintedDecoy.template ?? 'dotenv')
+            : 'nginx';
+      return done(errorPage(reply, skin, 404), 404);
     }
 
     /* ---------------- web-admin ---------------- */
@@ -263,62 +426,49 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       }
 
       if (method === 'GET' || method === 'HEAD') {
-        if (sub === '')
+        if (sub === '' || sub === '/login')
           return done(
-            send(
+            page(
               reply,
+              'admin',
               200,
-              'text/html; charset=utf-8',
-              tpl.loginPage({ brand, action: `${mount}/login` }),
+              tpl.loginPage({ brand, mount, action: `${mount}/login` }, env()),
             ),
             200,
           );
-        if (sub === '/login')
-          return done(
-            send(
-              reply,
-              200,
-              'text/html; charset=utf-8',
-              tpl.loginPage({ brand, action: `${mount}/login` }),
-            ),
-            200,
-          );
+        const a = assetTable('admin', bait)[sub];
+        if (a) return done(asset(reply, a, method), 200);
         if (sub === '/panel' || sub === '/export' || sub === '/export.csv') {
           if (firstOf(authed, keys) !== true || decoy.panel === 'none') {
-            return done(
-              reply
-                .code(302)
-                .headers({ ...SECURITY_HEADERS, location: mount })
-                .send(''),
-              302,
-            );
+            return done(redirect(reply, 'admin', mount), 302);
           }
           const rows = deps.honeytokens.canary.rows;
           if (sub === '/panel') {
             return done(
-              send(
+              page(
                 reply,
+                'admin',
                 200,
-                'text/html; charset=utf-8',
-                tpl.panelPage({ brand, mount, rows, withExport: true }),
+                tpl.panelPage({ brand, mount, rows, withExport: true }, env()),
               ),
               200,
             );
           }
           if (sub === '/export') {
             return done(
-              send(
+              page(
                 reply,
+                'admin',
                 200,
-                'text/html; charset=utf-8',
-                tpl.exportPage({ brand, mount, count: rows.length }),
+                tpl.exportPage({ brand, mount, count: rows.length }, env()),
               ),
               200,
             );
           }
           const csv = tpl.customersCsv(rows);
           return done(
-            send(reply, 200, 'text/csv; charset=utf-8', csv, {
+            respond(reply, 'admin', 200, 'text/csv; charset=UTF-8', csv, {
+              ...pageHeaders('admin', bait, now()),
               'content-disposition': 'attachment; filename="customers.csv"',
             }),
             200,
@@ -361,68 +511,116 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
         }
         const extra: Partial<LogLine> = { kind: 'login', username, password, accepted };
         if (accepted && decoy.panel !== 'none') {
-          return done(
-            reply
-              .code(302)
-              .headers({ ...SECURITY_HEADERS, location: `${mount}/panel` })
-              .send(''),
-            302,
-            extra,
-          );
+          return done(redirect(reply, 'admin', `${mount}/panel`), 302, extra);
         }
         return done(
-          send(
+          page(
             reply,
+            'admin',
             accepted ? 200 : 401,
-            'text/html; charset=utf-8',
-            tpl.loginPage({ brand, action: `${mount}/login`, error: !accepted }),
+            tpl.loginPage({ brand, mount, action: `${mount}/login`, error: !accepted }, env()),
           ),
           accepted ? 200 : 401,
           extra,
         );
       }
-      return done(send(reply, 404, 'text/html; charset=utf-8', tpl.NOT_FOUND), 404);
+      return done(errorPage(reply, 'admin', 404), 404);
     }
 
     /* ---------------- web-bait ---------------- */
     const template = decoy.template ?? 'dotenv';
+    const skin = skinOfTemplate(template);
+    const assetsBase = assetBase(template, decoy.mount);
+
+    if (path !== decoy.mount) {
+      // A second-order path (sdk/lxs/src/bait-assets.ts). Read-only apart from xmlrpc.php.
+      const rel = path.slice(assetsBase.length);
+      const isXmlRpc = template === 'wp-login' && rel === '/xmlrpc.php';
+      if (method !== 'GET' && method !== 'HEAD' && !isXmlRpc) {
+        return done(nginxPage(reply, 405), 405);
+      }
+      if (template === 'wp-login') {
+        if (rel === '/wp-admin') {
+          const to = encodeURIComponent(`${assetsBase}/wp-admin/`);
+          return done(
+            redirect(reply, 'wordpress', `${decoy.mount}?redirect_to=${to}&reauth=1`),
+            302,
+          );
+        }
+        if (isXmlRpc) {
+          const posted = method === 'POST';
+          return done(
+            respond(
+              reply,
+              'wordpress',
+              posted ? 200 : 405,
+              posted ? 'text/xml; charset=UTF-8' : 'text/plain;charset=UTF-8',
+              posted
+                ? '<?xml version="1.0" encoding="UTF-8"?>\n<methodResponse>\n  <fault>\n    <value>\n      <struct>\n        <member>\n          <name>faultCode</name>\n          <value><int>-32700</int></value>\n        </member>\n        <member>\n          <name>faultString</name>\n          <value><string>parse error. not well formed</string></value>\n        </member>\n      </struct>\n    </value>\n  </fault>\n</methodResponse>\n'
+                : 'XML-RPC server accepts POST requests only.',
+              posted ? {} : { allow: 'POST', 'x-powered-by': `PHP/${bait.versions.php}` },
+            ),
+            posted ? 200 : 405,
+          );
+        }
+        if (rel === '/wp-includes') return done(nginxPage(reply, 403), 403);
+      }
+      if (template === 'phpmyadmin' && rel === '/index.php') {
+        return done(
+          page(
+            reply,
+            'phpmyadmin',
+            200,
+            tpl.phpmyadminLogin({ base: assetsBase, action: decoy.mount, error: false }, env()),
+          ),
+          200,
+        );
+      }
+      if (template === 'git-config' && rel === '') return done(nginxPage(reply, 403), 403);
+      const a = assetTable(assetSkinOf(template), bait)[rel];
+      if (a) return done(asset(reply, a, method), 200);
+      return done(errorPage(reply, skin, 404, assetsBase), 404);
+    }
+
     if (template === 'wp-login' || template === 'phpmyadmin') {
+      const login = (error: boolean): string =>
+        template === 'wp-login'
+          ? tpl.wpLogin({ base: assetsBase, action: decoy.mount, error, site: siteName }, env())
+          : tpl.phpmyadminLogin({ base: assetsBase, action: decoy.mount, error }, env());
+      const cookie =
+        template === 'wp-login'
+          ? 'wordpress_test_cookie=WP%20Cookie%20check; path=/'
+          : `phpMyAdmin=${randomBytes(16).toString('hex')}; path=${assetsBase || ''}/; HttpOnly; SameSite=Strict`;
       if (method === 'POST') {
         const username = clip(pick(body, ['log', 'pma_username', 'username', 'user']), 256) ?? '';
         const password = clip(pick(body, ['pwd', 'pma_password', 'password', 'pass']), 128) ?? '';
-        const html =
-          template === 'wp-login'
-            ? tpl.wpLogin(decoy.mount, true)
-            : tpl.phpmyadminLogin(decoy.mount, true);
-        return done(send(reply, 200, 'text/html; charset=utf-8', html), 200, {
+        return done(page(reply, skin, 200, login(true), { 'set-cookie': cookie }), 200, {
           kind: 'login',
           username,
           password,
           accepted: false,
         });
       }
-      const html =
-        template === 'wp-login'
-          ? tpl.wpLogin(decoy.mount, false)
-          : tpl.phpmyadminLogin(decoy.mount, false);
-      return done(send(reply, 200, 'text/html; charset=utf-8', html), 200);
+      return done(page(reply, skin, 200, login(false), { 'set-cookie': cookie }), 200);
     }
     if (method !== 'GET' && method !== 'HEAD') {
-      return done(
-        send(reply, 405, 'text/plain; charset=utf-8', 'Method Not Allowed', { allow: 'GET, HEAD' }),
-        405,
-      );
+      return done(nginxPage(reply, 405), 405);
     }
+    const sid = readSessionId(req.headers.cookie);
     const ctx: tpl.BaitContext = {
       decoys: deps.decoys,
       honeytokens: deps.honeytokens,
+      bait,
       breadcrumbs: decoy.breadcrumbs !== false,
       used: [],
+      minted: [],
+      ...(mintSecret ? { mint: (b) => mintToken(mintSecret, b, ip, sid ?? '') } : {}),
     };
     let content: string;
-    let type = 'text/plain; charset=utf-8';
+    // nginx's default_type for files without a known extension (.env, .git/config).
+    let type = 'application/octet-stream';
     let file = decoy.mount.split('/').pop() || 'file';
-    let extraHeaders: Record<string, string> | undefined;
+    let extraHeaders: Record<string, string> = {};
     if (template === 'sql-dump') {
       content = tpl.sqlDump(ctx);
       type = 'application/sql; charset=utf-8';
@@ -439,12 +637,30 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
       (t) => t.kind === 'api_key' && ctx.used.includes(t.id),
     )?.id;
     const primary = apiId ?? ctx.used[0];
-    return done(send(reply, 200, type, content, extraHeaders), 200, {
+    respond(reply, 'nginx', 200, type, method === 'HEAD' ? '' : content, {
+      server: `nginx/${bait.versions.nginx}`,
+      ...staticHeaders(content, bait),
+      ...extraHeaders,
+    });
+    done(reply, 200, {
       kind: 'bait',
       file,
       bytes: Buffer.byteLength(content),
       ...(primary ? { honeytoken_id: primary, honeytoken_ids: [...ctx.used] } : {}),
     });
+    // One `mint` line per token handed out. ds-agent re-derives the value from the mint id and
+    // registers it; the platform maps the id to this visitor so a later use can be attributed.
+    for (const m of ctx.minted) {
+      deps.logger.write({
+        ...base,
+        kind: 'mint',
+        status: 200,
+        honeytoken_id: m.baseId,
+        mint_id: m.id,
+        ...(sid ? { session_id: sid } : {}),
+      });
+    }
+    return reply;
   });
 
   // Oversized or malformed requests still produce a log line and a generic response.

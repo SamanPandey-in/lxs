@@ -13,3 +13,9 @@ export {
   tagEvent,
 } from './rules.js';
 export * from './scoring.js';
+export {
+  DEFAULT_JITTER_PCT,
+  jitterThresholds,
+  PUBLISHED_THRESHOLDS,
+  type Thresholds,
+} from './thresholds.js';

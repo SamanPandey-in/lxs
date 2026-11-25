@@ -131,6 +131,8 @@ function fromPackage(mod: NormalizerModule, opts: NormalizeOptions): LineNormali
       } else {
         const ev = mod.normalizeWebDecoy(rec, ctx);
         if (ev) events.push(ev);
+        // A mint line names the token it handed out; it is not a read of the static token.
+        if (rec.kind === 'mint') return events;
         const ids = Array.isArray(rec.honeytoken_ids)
           ? rec.honeytoken_ids
           : rec.honeytoken_id
@@ -373,7 +375,7 @@ export function createLocalNormalizer(opts: NormalizeOptions): LineNormalizer {
           !isIP(ip) ||
           isLoopbackIp(ip) ||
           ip === '0.0.0.0' ||
-          !['login', 'request', 'bait', 'export'].includes(kind)
+          !['login', 'request', 'bait', 'export', 'mint'].includes(kind)
         ) {
           stats.dropped++;
           return [];
@@ -393,7 +395,21 @@ export function createLocalNormalizer(opts: NormalizeOptions): LineNormalizer {
           user_agent: clip(rec.ua, 512),
         };
         const events: DecoyEvent[] = [];
-        if (kind === 'login') {
+        if (kind === 'mint') {
+          const mintId = clip(rec.mint_id, 64);
+          if (!mintId || !/^[A-Za-z0-9_-]+\.[a-z2-7]{12}$/.test(mintId)) {
+            stats.dropped++;
+            return [];
+          }
+          events.push(
+            mk(`${seed}:0`, {
+              ...common0,
+              event_type: 'honeytoken.mint',
+              honeytoken_id: mintId,
+              session_id: clip(rec.session_id, 128),
+            }),
+          );
+        } else if (kind === 'login') {
           events.push(
             mk(`${seed}:0`, {
               ...common0,

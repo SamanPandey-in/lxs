@@ -28,6 +28,12 @@ export interface HoneytokenFile {
   /** Bait login leaked in /.env: not a platform-registered token, but its use on the SSH decoy chains the incident. */
   credentials: { ssh: { user: string; password: string } };
   canary: { rows: CanaryRow[] };
+  /**
+   * Per-deployment HMAC key (base64, 32 bytes) for per-visitor honeytokens: ds-web derives a unique
+   * API key per visitor session from it, and ds-agent re-derives the same value to recognise it.
+   * Absent in files written before per-visitor tokens; ds-web then serves the static token.
+   */
+  mint_secret?: string;
 }
 
 export const sha256Hex = (s: string): string => createHash('sha256').update(s).digest('hex');
@@ -75,6 +81,10 @@ const COMPANIES = [
   'Litware Home',
 ];
 const PLANS = ['starter', 'growth', 'enterprise'];
+const SYMBOLS = ['!', '#', '$', '%', '*', '-', '_', '.'];
+const LOWER = 'abcdefghijkmnopqrstuvwxyz';
+const UPPER = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const DIGITS = '23456789';
 const WORDS = ['Summer', 'Winter', 'Autumn', 'Spring', 'Harbor', 'Falcon', 'Copper', 'Meadow'];
 
 function canaryRow(i: number): CanaryRow {
@@ -91,6 +101,49 @@ function canaryRow(i: number): CanaryRow {
     plan: PLANS[randomInt(PLANS.length)] as string,
     card_last4: '4242',
   };
+}
+
+const safeDecode = (v: string): string => {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+};
+
+const pickChar = (set: string): string => set[randomInt(set.length)] as string;
+
+/**
+ * A DB password that looks like one a person or a password manager chose, not 20 base62 characters.
+ * Crypto randomness, not the build seed: the value is honeytoken plaintext and never committed.
+ */
+export function realisticDbPassword(): string {
+  const style = randomInt(3);
+  if (style === 0) {
+    // Two capitalised words, digits, a symbol: "CopperMeadow2291!".
+    const a = WORDS[randomInt(WORDS.length)] as string;
+    let b = WORDS[randomInt(WORDS.length)] as string;
+    while (b === a) b = WORDS[randomInt(WORDS.length)] as string;
+    return `${a}${b}${randomInt(10, 10_000)}${SYMBOLS[randomInt(SYMBOLS.length)]}`;
+  }
+  if (style === 1) {
+    // Generator style in dash-separated groups: "pK7v-x9Qm-T2wb-h4Rz".
+    const group = (): string =>
+      Array.from({ length: 4 }, () => pickChar(randomInt(3) === 0 ? DIGITS : LOWER + UPPER)).join(
+        '',
+      );
+    return Array.from({ length: 4 }, group).join('-');
+  }
+  // 16-24 mixed characters with at least one of each class.
+  const all = LOWER + UPPER + DIGITS + SYMBOLS.join('');
+  const len = randomInt(16, 25);
+  const chars = [pickChar(LOWER), pickChar(UPPER), pickChar(DIGITS), pickChar('!#%*-_.')];
+  while (chars.length < len) chars.push(pickChar(all));
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [chars[i], chars[j]] = [chars[j] as string, chars[i] as string];
+  }
+  return chars.join('');
 }
 
 /**
@@ -127,13 +180,12 @@ export function generateHoneytokens(
     });
   }
   const prevDb = existing?.tokens.find((t) => t.id === 'ht_db_01');
-  const dbPass = prevDb
-    ? (prevDb.value.split(':')[2]?.split('@')[0] ?? randomBase62(20))
-    : randomBase62(20);
+  const prevPass = prevDb?.value.split(':')[2]?.split('@')[0];
+  const dbPass = prevPass ? safeDecode(prevPass) : realisticDbPassword();
   tokens.push({
     id: 'ht_db_01',
     kind: 'db_url',
-    value: `postgres://svc_reporting:${dbPass}@db-backup-01.internal:5432/${cfg.options.service}_prod`,
+    value: `postgres://svc_reporting:${encodeURIComponent(dbPass)}@db-backup-01.internal:5432/${cfg.options.service}_prod`,
     planted_in: web,
   });
 
@@ -153,6 +205,11 @@ export function generateHoneytokens(
       },
     },
     canary: { rows },
+    // Reused across builds: rotating it would orphan every token minted so far.
+    mint_secret:
+      existing?.mint_secret && /^[A-Za-z0-9+/]{43}=$/.test(existing.mint_secret)
+        ? existing.mint_secret
+        : randomBytes(32).toString('base64'),
   };
 }
 

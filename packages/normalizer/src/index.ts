@@ -334,6 +334,7 @@ const WEB_KIND_MAP: Readonly<Record<string, EventType>> = {
   export: 'file.download',
   honeytoken: 'honeytoken.read',
   honeytoken_read: 'honeytoken.read',
+  mint: 'honeytoken.mint',
 };
 
 /**
@@ -386,6 +387,11 @@ export function normalizeWebDecoy(
     })();
   } else if (eventType === 'honeytoken.read') {
     partial.honeytoken_id = str(line.token_id ?? line.honeytoken_id, 64);
+  } else if (eventType === 'honeytoken.mint') {
+    // The per-visitor id (<base id>.<tag>); ds-web's line carries the base id in honeytoken_id.
+    const mintId = str(line.mint_id, 64);
+    if (!mintId || !/^[A-Za-z0-9_-]+\.[a-z2-7]{12}$/.test(mintId)) return drop(ctx, 'invalid');
+    partial.honeytoken_id = mintId;
   }
 
   partial.raw = sanitiseRaw(line);

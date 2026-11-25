@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { DecoyEvent } from '@lxs/schema';
 import { AGENT_VERSION, type AgentConfig, loadConfig } from './config.js';
 import { createLocalApi } from './local-api.js';
+import { loadMintKeys, MintRegistry } from './mint.js';
 import {
   AuthAggregator,
   createNormalizer,
@@ -77,6 +78,16 @@ async function main(): Promise<void> {
 
   const hashes = loadHoneytokenHashes(cfg.honeytokensPath);
   const policy = new PolicyStore(hashes);
+  // Per-visitor honeytokens (ds-web mint lines): re-derived here and served to the SDK like the
+  // static token. Ids persist under the state dir so a restart keeps recognising earlier visitors.
+  const mintKeys = loadMintKeys(cfg.honeytokensPath);
+  const mints = mintKeys
+    ? new MintRegistry(mintKeys, path.join(cfg.stateDir, 'minted-honeytokens.json'))
+    : null;
+  if (mints) {
+    mints.load();
+    for (const [hash, id] of Object.entries(mints.entries())) policy.addHoneytoken(hash, id);
+  }
   let sensorId: string | undefined;
   let shipper: Shipper | undefined;
   let tail: TailManager | undefined;
@@ -85,6 +96,10 @@ async function main(): Promise<void> {
   const pending: DecoyEvent[] = [];
   const emit = (ev: DecoyEvent): void => {
     if (ev.is_decoy && ev.src_ip) policy.addLocalWatch(ev.src_ip); // watch the moment we see a decoy hit
+    if (ev.event_type === 'honeytoken.mint' && ev.honeytoken_id) {
+      const added = mints?.add(ev.honeytoken_id);
+      if (added) policy.addHoneytoken(added.hash, added.id);
+    }
     if (shipper) shipper.enqueue(ev);
     else if (pending.length < 5000) pending.push(ev);
   };
@@ -268,6 +283,7 @@ async function main(): Promise<void> {
   tail.start();
   const flushTimer = setInterval(() => {
     for (const ev of aggregator.flush()) emit(ev);
+    mints?.save();
   }, 10_000);
 
   // Heartbeat.
@@ -314,6 +330,7 @@ async function main(): Promise<void> {
     for (const ev of aggregator.flush(Date.now() + 120_000)) emit(ev);
     await shipper?.stop(5000);
     tail?.commit();
+    mints?.save();
     await localApi.stop();
     process.exit(0);
   };

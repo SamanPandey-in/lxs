@@ -6,6 +6,7 @@ import { parse as parseYaml } from 'yaml';
 import { type DeclarativeConfig, defineConfig } from '../config.js';
 import { isLXS, type LXS } from '../create.js';
 import { LXSConfigError } from '../errors.js';
+import { type BaitSeed, newBaitSeed, parseBaitSeed } from '../generate/bait.js';
 import { type HoneytokenFile, parseHoneytokenFile } from '../generate/honeytokens.js';
 import { COMPOSE_FILE, generateAll } from '../generate/index.js';
 import type { ResolvedConfig } from '../types.js';
@@ -16,6 +17,8 @@ export interface BuildOptions {
   config?: string;
   out?: string;
   check?: boolean;
+  /** Draw a new bait seed (new banners, APP_KEY, timestamps) instead of keeping the manifest's. */
+  reseed?: boolean;
   log?: (msg: string) => void;
 }
 
@@ -232,7 +235,25 @@ export async function runBuild(opts: BuildOptions): Promise<number> {
     const t = readIfExists(secretsFile);
     return t ? parseHoneytokenFile(t) : null;
   })();
-  const gen = generateAll(cfg, { existingHoneytokens: existing, composeFile: composeOut });
+  // The bait seed lives in the committed manifest so every machine renders the same bait.
+  const prevSeed: BaitSeed | null = (() => {
+    const t = readIfExists(path.join(cwd, '.lxs/manifest.json'));
+    if (!t) return null;
+    try {
+      return parseBaitSeed((JSON.parse(t) as { bait?: unknown }).bait);
+    } catch {
+      return null;
+    }
+  })();
+  if (opts.check && opts.reseed) {
+    throw new LXSConfigError('E_OPTIONS', '--check and --reseed cannot be combined.');
+  }
+  const baitSeed = opts.reseed || !prevSeed ? newBaitSeed() : prevSeed;
+  const gen = generateAll(cfg, {
+    existingHoneytokens: existing,
+    composeFile: composeOut,
+    baitSeed,
+  });
 
   for (const [file, content] of gen.committed) {
     if (content.includes('ds_live_')) {
@@ -269,6 +290,8 @@ export async function runBuild(opts: BuildOptions): Promise<number> {
 
   log(`  ✔ ${cfg.decoys.length} decoys: ${cfg.decoys.map(describeDecoy).join(' · ')}`);
   log(`  ✔ ${cfg.assets.length} assets, 1 honeytoken set generated (.lxs/secrets/, git-ignored)`);
+  if (opts.reseed || !prevSeed)
+    log(`  ✔ new bait seed ${baitSeed.seed.slice(0, 8)}… (${baitSeed.epoch})`);
   const mounts = cfg.decoys.flatMap((d) =>
     d.type === 'web-admin' || d.type === 'web-bait' ? [d.mount] : [],
   );

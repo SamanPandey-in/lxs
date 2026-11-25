@@ -1,5 +1,6 @@
 import type { ResolvedConfig } from '../types.js';
 import { SDK_VERSION } from '../version.js';
+import type { BaitSeed } from './bait.js';
 import type { HoneytokenFile } from './honeytokens.js';
 
 /** Declared containment posture, recorded so the platform can display (and `selftest` can verify) it. */
@@ -37,7 +38,11 @@ export const POSTURE = {
  * .lxs/manifest.json (committed). Honeytoken *hashes* are deliberately absent so the file is
  * deterministic across machines; the agent derives them from the mounted secrets file.
  */
-export function renderManifest(cfg: ResolvedConfig, tokens: HoneytokenFile): string {
+export function renderManifest(
+  cfg: ResolvedConfig,
+  tokens: HoneytokenFile,
+  baitSeed?: BaitSeed,
+): string {
   const posture: Record<string, unknown> = { ...POSTURE };
   if (cfg.decoys.some((d) => d.type === 'redis'))
     posture['ds-redis'] = {
@@ -86,6 +91,8 @@ export function renderManifest(cfg: ResolvedConfig, tokens: HoneytokenFile): str
     honeytokens: tokens.tokens.map((t) => ({ id: t.id, kind: t.kind, planted_in: t.planted_in })),
     // Tells ds-agent which production telemetry files to tail (absent: none).
     ...(cfg.options.telemetry ? { telemetry: { sources: cfg.options.telemetry.sources } } : {}),
+    // Seed for the per-build bait values in web-decoys.json. Kept across builds; `build --reseed` replaces it.
+    ...(baitSeed ? { bait: baitSeed } : {}),
     posture,
   };
   return `${JSON.stringify(doc, null, 2)}\n`;

@@ -230,6 +230,17 @@ A manual run from a branch builds without pushing.
 | **G: First run** | `lxs init --preset`, hosted endpoint default (placeholder URL), `lxs doctor` (10 checks), onboarding safe test hit, sample data load/clear (migration 0009) | Test hit alerts; sample data sends no alerts; clear removes only sample rows (local Postgres, 2026-11-24). Browser pass not done |
 | **H: Worker + ops** | Coalesced worker, `/metrics`, deploy workflow, backup/restore scripts, OPERATIONS.md | Burst numbers measured; metrics scraped locally |
 
+## Phase 3 (merged 2026-11-24)
+
+| Stream | What shipped | Verified on local Postgres 2026-11-24 |
+|---|---|---|
+| **I: Data handling** | Project export (tar of gzip NDJSON, 24 h download), soft delete with 7-day grace + restore, account delete, captured-password hashing after 30 days, plans (`free`/`team`/`custom`) driving retention and caps, `DATA-HANDLING.md`, legal drafts, `SECURITY.md` (migration 0011) | Export of 16 tables with no salts/hashes/encrypted fields; delete → 404 + ingest 403 → restore; account delete with password confirm. S3 export storage is a stub |
+| **J: Digest, coverage, milestones** | Weekly digest (email + opted-in channels, sample/test data excluded, one per ISO week), coverage score with explained recommendations, noise counter, milestones (migration 0010) | Coverage, milestones, digest preview respond; digest dedupe checked by the stream on a scratch DB |
+| **K: Response + cost caps** | Auto-block policy (off by default, monitor/enforce, audited, undo), Block 24h from Slack (signed interactive actions), allowlist suggestions, global/org/project LLM caps with plan defaults and an AI usage meter (migration 0012) | ps-attacker replay → `auto` 24 h block in 2 s; undo audited; forged Slack signature 401, signed click → `slack` block by the mapped member |
+| **L: Deception quality** | Per-template markup, CSS and 404s, second-order assets, per-build bait from a stored seed (`--reseed`), response jitter, per-visitor HMAC honeytokens with mint→use attribution panel, opt-in threshold jitter (migration 0013) | Unit/integration tests only (decoy-web 35, agent 39). Golden scores unchanged; 80/80 conformance vectors still pass |
+
+Not yet seen in a browser: Phase 2 onboarding/sample-data UI and all Phase 3 dashboard panels.
+
 ## Known gaps
 
 | ID | Gap | Where it stands |

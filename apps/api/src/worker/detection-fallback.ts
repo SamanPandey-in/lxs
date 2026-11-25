@@ -16,6 +16,8 @@ export interface DetectionContext {
   commonCredentials: Set<string>;
   criticalAssets: string[];
   existingDetections?: Detection[];
+  /** Per-deployment thresholds (see @lxs/detection thresholds.ts); the fallback ignores them. */
+  thresholds?: Record<string, number>;
 }
 
 export interface EventTag {

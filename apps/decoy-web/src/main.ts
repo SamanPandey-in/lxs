@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadDecoys, loadHoneytokens } from './config.js';
+import { createJitter } from './jitter.js';
 import { JsonlLogger } from './log.js';
 import { buildServer } from './server.js';
 
@@ -27,7 +28,16 @@ async function main(): Promise<void> {
   const decoys = loadDecoys(configPath);
   const honeytokens = loadHoneytokens(tokensPath);
   const logger = new JsonlLogger({ dir: logDir });
-  const app = buildServer({ decoys, honeytokens, logger });
+  // Jitter is on in the container unless web-decoys.json says `"jitter": false` or DS_WEB_JITTER=0.
+  const jitter = process.env.DS_WEB_JITTER === '0' ? null : createJitter(decoys.jitter ?? true);
+  const app = buildServer({
+    decoys,
+    honeytokens,
+    logger,
+    jitter,
+    // DS_WEB_PER_VISITOR_TOKENS=0 serves the static token (e.g. while an older ds-agent is deployed).
+    perVisitorTokens: process.env.DS_WEB_PER_VISITOR_TOKENS !== '0',
+  });
 
   if (process.platform !== 'win32') fs.rmSync(socketPath, { force: true }); // stale socket from a previous run
   await app.listen({ path: socketPath });

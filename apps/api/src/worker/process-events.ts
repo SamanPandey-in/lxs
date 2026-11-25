@@ -10,6 +10,7 @@ import {
   type ProcessEventsJob,
 } from '../jobs/queue.js';
 import { sha256hex } from '../lib/crypto.js';
+import { baseTokenId } from '../lib/honeytoken-attribution.js';
 import { STREAM_CHANNEL, streamPayload } from '../lib/notify.js';
 import { compactIncident, type IncidentRow, incidentSummaryCols } from '../lib/serialize.js';
 import { detectionLatency } from '../plugins/metrics.js';
@@ -17,6 +18,7 @@ import {
   type ChainResult,
   commonCredentials,
   type DetectionContext,
+  detectionThresholds,
   loadDetection,
 } from './detection.js';
 import { buildTemplateSummary } from './narrative.js';
@@ -198,6 +200,7 @@ async function processGroup(
       now: new Date(),
       commonCredentials: commonCredentials(),
       criticalAssets: await loadCriticalAssets(tx, projectId),
+      ...detectionThresholds(det, projectId),
     };
 
     const tagged = rows.map((row) => {
@@ -479,7 +482,9 @@ async function processGroup(
         rows
           .filter((r) => r.eventType === 'honeytoken.use')
           .map((r) => (r.fields as { honeytoken_id?: string }).honeytoken_id)
-          .filter((x): x is string => !!x),
+          .filter((x): x is string => !!x)
+          // A per-visitor token (<base id>.<tag>) counts as a use of its registered base token.
+          .map(baseTokenId),
       ),
     ];
     if (tokenIds.length) {
